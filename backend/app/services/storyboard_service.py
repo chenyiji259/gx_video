@@ -12,9 +12,8 @@
     6. 推送 4 个事件（doc 21 §6.1）：
        storyboard.grid.generating / generated / split_done / all_grids_completed
 
-跨九宫格衔接（doc 21 §3.2）：
-  第 N+1 张的 cell 1 物理复用第 N 张的 cell 9 asset_id，
-  保证视觉 100% 一致。
+当前版本说明：
+  默认仅使用单张九宫格，不启用跨九宫格 cell 复用策略。
 """
 from __future__ import annotations
 
@@ -218,8 +217,6 @@ class StoryboardService:
             sb_version_id = storyboard_version.id
 
         # ---- 步骤 5: 遍历 grid 1..grid_count -----------------------
-        prev_cell9_asset_id: str | None = None
-        prev_cell9_description: str | None = None
         all_grids_meta: list[dict] = []
 
         for grid_index in range(1, grid_count + 1):
@@ -231,8 +228,6 @@ class StoryboardService:
                 narrative_shots=narrative_shots,
                 shot_id_by_index=shot_id_by_index,
                 storyboard_version_id=sb_version_id,
-                prev_cell9_asset_id=prev_cell9_asset_id,
-                prev_cell9_description=prev_cell9_description,
                 logger=logger,
                 grids_meta=all_grids_meta,
             )
@@ -250,21 +245,6 @@ class StoryboardService:
                         "grids": all_grids_meta,
                     }
                     uow.session.add(sv)
-
-            # 更新跨 grid 衔接信息（doc 21 §3.2）
-            last_grid = all_grids_meta[-1]
-            prev_cell9_asset_id = last_grid["cells"][-1]["asset_id"]
-            cell9_shot_index = (grid_index - 1) * 3 + 2
-            if cell9_shot_index < len(narrative_shots):
-                next_shot = narrative_shots[cell9_shot_index]
-                prev_cell9_description = next_shot.get(
-                    "start_frame_description", ""
-                )
-            else:
-                last_shot = narrative_shots[-1]
-                prev_cell9_description = last_shot.get(
-                    "end_frame_description", ""
-                )
 
         # ---- 步骤 6: 推进项目阶段 + emit all_completed ------------------
         async with UnitOfWork() as uow:
@@ -347,8 +327,6 @@ class StoryboardService:
         narrative_shots: list[dict],
         shot_id_by_index: dict[int, str],
         storyboard_version_id: str,
-        prev_cell9_asset_id: str | None,
-        prev_cell9_description: str | None,
         logger: Any,
         grids_meta: list[dict],
     ) -> None:
@@ -394,8 +372,7 @@ class StoryboardService:
 
         # 2. 编译九宫格 prompt + emit storyboard.grid.generating
         logger.info(
-            f"grid[{grid_index}] 开始编译九宫格 prompt: cells={len(shot_descriptions)} "
-            f"prev_cell9={'有' if prev_cell9_description else '无'}",
+            f"grid[{grid_index}] 开始编译九宫格 prompt: cells={len(shot_descriptions)}",
             event_type="storyboard_grid_prompt_compile_start",
         )
         prompt_compile_started_at = time.monotonic()
@@ -406,7 +383,7 @@ class StoryboardService:
                 grid_index=grid_index,
                 total_grids=total_grids,
                 shot_descriptions=shot_descriptions,
-                prev_cell9_description=prev_cell9_description,
+                prev_cell9_description=None,
             )
             await event_log_service.emit(
                 uow.session,
@@ -478,7 +455,7 @@ class StoryboardService:
                 ),
             )
 
-        # 5. 切分 9 张 cell（带跨九宫格衔接 prev_cell9_asset_id）
+        # 5. 切分 9 张 cell
         split_started_at = time.monotonic()
         logger.info(
             f"grid[{grid_index}] 开始切分九宫格: parent_asset_id={parent_asset_id!r}",
@@ -488,7 +465,6 @@ class StoryboardService:
             parent_asset_id=parent_asset_id,
             project_id=project_id,
             grid_index=grid_index,
-            prev_cell9_asset_id=prev_cell9_asset_id,
         )
         logger.info(
             f"grid[{grid_index}] 九宫格切分完成: cell_count={len(cell_asset_ids)} "
@@ -518,9 +494,7 @@ class StoryboardService:
                     "shot_index": shot_idx if shot_idx < len(narrative_shots) else None,
                     "frame_description": narrative_meta.get("frame_description", ""),
                     "scene_description": narrative_meta.get("scene_description", ""),
-                    "is_reused_from_prev_grid": (
-                        cell_pos == 1 and prev_cell9_asset_id == cell_aid
-                    ),
+                    "is_reused_from_prev_grid": False,
                 })
 
             await event_log_service.emit(
@@ -606,6 +580,6 @@ class StoryboardService:
 
         logger.info(
             f"grid[{grid_index}] 处理完成: parent={parent_asset_id} "
-            f"cells={len(cell_asset_ids)} reused_cell1={bool(prev_cell9_asset_id)}",
+            f"cells={len(cell_asset_ids)}",
             event_type="storyboard_grid_done",
         )

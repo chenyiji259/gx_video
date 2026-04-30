@@ -548,8 +548,6 @@ class ImageGenerationTool:
         parent_asset_id: str,
         project_id: str,
         grid_index: int,
-        *,
-        prev_cell9_asset_id: Optional[str] = None,
     ) -> list[str]:
         """从九宫格大图切分 9 张 1024×1024 cell 图，每张作为 storyboard_frame asset 落库。
 
@@ -557,9 +555,6 @@ class ImageGenerationTool:
             parent_asset_id:     九宫格大图 asset_id（asset_type=nine_grid_image）
             project_id:          所属项目 ID
             grid_index:          第几张九宫格（从 1 开始）
-            prev_cell9_asset_id: 跨九宫格衔接（doc 21 §3.2）：
-                非空时，cell 1 不切分，直接复用 prev_cell9_asset_id（同一张图的 asset_id）
-                适用于 grid_index >= 2 时，保证 cell 1 = 上一张 cell 9 视觉等同
 
         Returns:
             9 个 asset_id 列表（按 cell_position 1-9 顺序）
@@ -612,15 +607,6 @@ class ImageGenerationTool:
         cell_asset_ids: list[str] = []
 
         for cell_position in range(1, 10):
-            # 跨九宫格衔接：cell 1 复用上一张 cell 9 asset_id
-            if cell_position == 1 and prev_cell9_asset_id:
-                cell_asset_ids.append(prev_cell9_asset_id)
-                logger.info(
-                    f"cell 1 复用上一张 cell 9: prev_asset_id={prev_cell9_asset_id!r}",
-                    event_type="nine_grid_cell1_reused",
-                )
-                continue
-
             # 计算 cell 在大图中的坐标
             row = (cell_position - 1) // 3
             col = (cell_position - 1) % 3
@@ -686,8 +672,7 @@ class ImageGenerationTool:
             cell_asset_ids.append(cell_asset_id)
 
         logger.info(
-            f"九宫格切分完成: grid_index={grid_index} cells={len(cell_asset_ids)} "
-            f"reused_cell1={bool(prev_cell9_asset_id)}",
+            f"九宫格切分完成: grid_index={grid_index} cells={len(cell_asset_ids)}",
             event_type="nine_grid_split_done",
         )
         return cell_asset_ids

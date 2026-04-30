@@ -386,13 +386,13 @@ class CreativePlanningAgent:
     @staticmethod
     def _fallback_brief(style_direction: str, user_prompt: str) -> dict[str, Any]:
         """LLM 不可用时的降级 brief 结构（doc 21 §1.1 含 extension 子字段）。"""
-        # doc 21 §3.3 默认值：60s 视频 → 6 shot → 1 张九宫格 → 实际生成 8 shot
+        # 当前默认值：短视频场景收敛为 1 张九宫格 / 3 个 shot
         fallback_extension = {
-            "target_duration_sec": 60,
-            "shot_duration_sec": None,
-            "shot_count": 6,
+            "target_duration_sec": 30,
+            "shot_duration_sec": 10,
+            "shot_count": 3,
             "grid_count": 1,
-            "total_shots_generated": 6,
+            "total_shots_generated": 3,
             "allowed_shot_durations_sec": [4, 5, 6, 8, 10, 12, 15],
             "character_list": [],
             "target_platform": None,

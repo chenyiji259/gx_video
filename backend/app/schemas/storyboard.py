@@ -8,7 +8,7 @@
 设计要点：
   - 一张九宫格大图（asset_type=nine_grid_image）→ 1 个 NineGridMeta
   - 9 张切分小图（asset_type=storyboard_frame）→ 9 个 NineGridFrameVO
-  - 跨九宫格衔接：第 N+1 张的 cell1 物理复用第 N 张的 cell9
+  - 当前版本按 3 行 × 3 列组织，每一行对应一个 shot 的 起始 / 中间 / 结尾
 """
 from __future__ import annotations
 
@@ -18,16 +18,16 @@ from pydantic import BaseModel, ConfigDict, Field
 class NineGridFrameVO(BaseModel):
     """九宫格中单个 cell 的元数据（对应一张切分图 + 1 个 shot 的关键帧）。
 
-    cell_position 与 shot 的关系（doc 21 §3.1）：
-      shot N 的首帧 = cell N 的图片
-      shot N 的尾帧 = cell N+1 的图片
-      （cell 1-9，shot 1-8，首尾帧重叠）
+    当前版本中：
+      - cell 1/2/3 → shot 1 的起始 / 中间 / 结尾
+      - cell 4/5/6 → shot 2 的起始 / 中间 / 结尾
+      - cell 7/8/9 → shot 3 的起始 / 中间 / 结尾
     """
     cell_position: int                      # 1-9
     asset_id: str                           # 切分图 asset_id
     asset_url: str                          # 切分图 storage_uri（永久直链）
-    shot_id: str | None = None              # 关联的 shot（cell N 是 shot[N-1] 的尾帧 + shot[N] 的首帧）
-    is_reused_from_prev_grid: bool = False  # 是否复用自上一张九宫格的 cell9（doc 21 §3.2）
+    shot_id: str | None = None              # 关联的 shot（同一行 3 个 cell 共享同一个 shot_id）
+    is_reused_from_prev_grid: bool = False  # 当前版本固定为 false，保留字段仅兼容旧数据
 
     model_config = ConfigDict(frozen=True)
 
@@ -56,6 +56,6 @@ class StoryboardOverview(BaseModel):
     storyboard_version_id: str
     version_no: int
     grid_count: int                         # 该版本含几张九宫格
-    total_frames: int                       # 总切分图数 = 9 + 8(N-1) = 8N+1
-    total_shots: int                        # 总 shot 数 = 8N
+    total_frames: int                       # 当前版本总切分图数 = 9 × grid_count
+    total_shots: int                        # 当前版本总 shot 数 = 3 × grid_count
     grids: list[NineGridMeta] = Field(default_factory=list)

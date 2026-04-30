@@ -858,7 +858,7 @@ class PromptCompilerService:
         shot_descriptions: list[dict],
         prev_cell9_description: str | None = None,
     ) -> PromptBundle:
-        """编译九宫格生图 prompt（doc 21 §3 + §6）。
+        """编译九宫格生图 prompt。
 
         Args:
             session:                已开启的 AsyncSession
@@ -866,8 +866,8 @@ class PromptCompilerService:
             grid_index:             第几张九宫格（从 1 开始）
             total_grids:            总九宫格张数
             shot_descriptions:      9 个 cell 对应的 shot 描述列表（含 start_frame/end_frame/scene_description 等）
-            prev_cell9_description: 跨九宫格衔接（doc 21 §3.2）：
-                grid_index >= 2 时传入上一张 cell9 的画面描述
+            prev_cell9_description: 预留扩展字段。
+                当前版本默认单张九宫格，可传 None。
 
         Returns:
             PromptBundle（target_type='nine_grid_image', target_id=f"grid_{grid_index:03d}"）
@@ -1061,7 +1061,7 @@ def _make_fallback_nine_grid_prompt(
 
     bridge_note = ""
     if prev_cell9_description:
-        bridge_note = f" Cell 1 must visually match the previous grid's cell 9: {prev_cell9_description}."
+        bridge_note = f" Keep visual continuity with the previous grid ending state: {prev_cell9_description}."
 
     grid_spec = _resolve_nine_grid_output_spec(ext.aspect_ratio)
 

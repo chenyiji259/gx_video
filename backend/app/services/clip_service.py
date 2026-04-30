@@ -159,10 +159,11 @@ class ClipService:
                 and s.shot_plan_version_id == shot_plan_version_id
             ]
 
-            # 读取九宫格边界帧映射：
-            #   shot i = cell(i+1) -> cell(i+2)
-            # 每张九宫格 9 个 cell 产生 8 个视频 shot；跨九宫格时下一张 cell1
-            # 物理复用上一张 cell9，因此边界帧天然连续。
+            # 读取九宫格行级帧映射：
+            #   shot 1 = cell1 / cell2 / cell3
+            #   shot 2 = cell4 / cell5 / cell6
+            #   shot 3 = cell7 / cell8 / cell9
+            # 当前版本默认按“单张九宫格、每行 3 图融合成 1 个视频 shot”执行。
             sb_version = await StoryboardVersionRepository(session).get_active(project_id)
             asset_repo = AssetRepository(session)
             shot_frame_urls_map: dict[str, list[str]] = {}

@@ -165,7 +165,7 @@ async def get_storyboard_grids(
                   "cell_position": 1,
                   "asset_id": "...",
                   "asset_url": "...",
-                  "is_reused_from_prev_grid": false  // 跨九宫格 cell9→cell1 复用标识
+                  "is_reused_from_prev_grid": false  // 当前版本固定 false，仅兼容历史字段
                 }, ...
               ]
             }, ...
