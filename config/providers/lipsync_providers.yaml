@@ -1,0 +1,6 @@
+# VidMuse 口型生成（LipSync）Provider 配置
+#
+# 当前无可用接入（Hedra API key 未配置，MuseTalk / SyncLabs 未接入）
+# 接入新 Provider 时在此添加，并在 external_apis.yaml 补充对应凭据
+
+lipsync_providers: []

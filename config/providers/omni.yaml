@@ -1,0 +1,45 @@
+# Qwen Omni 多模态模型配置
+# 用于音频分析、图片分析、造型推导等多模态任务
+
+# =========================================================
+# 地域选择（二选一，取注释一行）
+# 中国内地（北京）：
+endpoint: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+# 国际（新加坡）：
+# endpoint: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+# =========================================================
+
+# 模型名称
+# qwen3.5-omni-plus：邀测状态，需申请白名单
+# qwen3-omni-flash：混合思考模型，150s 内音视频，正式可用
+# qwen-omni-turbo：已停更但正式可用，兜底选择
+# model_name: "qwen3.5-omni-plus"
+model_name: "qwen3-omni-flash"
+# model_name: "qwen-omni-turbo"
+
+# 环境变量名（存放 DashScope API Key）
+api_key_env: "DASHSCOPE_API_KEY"
+
+# 请求参数
+# 16-03：timeout 120→900（单次调用最多 15 分钟，8min 音频分析需要）
+timeout: 900
+# 16-03：max_tokens 4096→32768（长音频 JSON 通常 5000~12000 token，取 32K 与模型上限对齐）
+max_tokens: 32768
+temperature: 0.3
+
+# 输出模态：明确指定 text-only，避免模型尝试返回音频流
+# 注：VidMuse 的所有 Omni 调用均是音频/图像输入 → 文本输出
+output_modalities:
+  - text
+
+# 支持的输入模态
+supported_input_modalities:
+  - text
+  - audio
+  - image
+
+# 音频分析专用配置
+audio_analysis:
+  max_audio_duration_sec: 150    # qwen3-omni-flash 限制 150s、qwen3.5-omni-plus 限制 10800s(3h)
+  preferred_format: "wav"        # 裁切后统一存为 wav
+  sample_rate: 16000

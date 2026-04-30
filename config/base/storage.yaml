@@ -1,0 +1,20 @@
+# MinIO / S3 Compatible Storage Configuration
+
+storage:
+  # 服务器连接信息
+  endpoint: 8.134.170.191:90
+  access_key: "${MINIO_ACCESS_KEY}"
+  secret_key: "${MINIO_SECRET_KEY}"
+  bucket: muse
+
+  # 是否使用 HTTPS
+  secure: false
+
+  # 区域设置
+  region: us-east-1
+
+  # 文件大小限制 (bytes)
+  max_upload_size: 104857600  # 100MB
+
+  # 预签名 URL 过期时间 (seconds)
+  presigned_expiry: 3600

@@ -1,0 +1,25 @@
+# VidMuse Application Configuration
+
+app:
+  name: VidMuse
+  version: 0.1.0
+  debug: false
+  host: 0.0.0.0
+  port: 8000
+
+api:
+  prefix: /api/v1
+  cors_origins:
+    - "*"
+
+media:
+  ffmpeg_path: '${FFMPEG_PATH}'
+
+jwt:
+  # Secret key for signing tokens - injected from env var, never hardcoded
+  secret: "${JWT_SECRET}"
+  algorithm: HS256
+  # Access token expiry in minutes (default: 30 min)
+  access_token_expire_minutes: 30
+  # Refresh token expiry in days (default: 7 days)
+  refresh_token_expire_days: 7

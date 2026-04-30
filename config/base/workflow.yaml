@@ -1,0 +1,37 @@
+# VidMuse 工作流引擎配置
+#
+# 控制 LangGraph 图执行行为、状态机策略、任务并发和超时规则。
+
+workflow:
+  # 状态机是否严格模式（拒绝非法状态转换）
+  state_machine_strict: true
+
+  # Tool 执行失败后的自动重试次数
+  auto_retry_count: 2
+
+  # 是否允许 provider 降级 fallback（主 provider 失败时切换备用）
+  allow_provider_fallback: true
+
+  # 最大并发 Tool Job 数量
+  max_concurrent_jobs: 4
+
+  # 单个 Tool Job 超时秒数（安全网，实际超时由各 handler 内部 asyncio.wait_for 控制）
+  # 16-03：660→3000（覆盖 Omni 3 次重试 × 900s = 2700s + 余量，防止 Worker 误判僵尸任务）
+  job_timeout_seconds: 3000
+
+  # Human-in-the-loop 决策等待时间（秒），超时后进入 expired 状态
+  decision_expire_seconds: 3600
+
+  # LangGraph checkpoint 后端（sqlite 用于本地开发，postgres 用于生产）
+  checkpoint_backend: sqlite
+  checkpoint_sqlite_path: "data/checkpoints/langgraph.db"
+
+  # Director Mode B 审核产物内容的最大字符数
+  # 叙事剧本/shot_plan 的 JSON 通常 3000-12000 字符，设为 10000 足够容纳完整内容
+  # 调高此值会增加 prompt 消耗，请根据使用的 LLM context window 窗口大小调整
+  artifact_review_max_chars: 10000
+
+  # ⚠️ 仅用于开发 / 测试环境，生产环境必须设为 false
+  # 开启后 human_confirmation_gate 节点将自动选取默认选项，跳过所有人工确认阶段，
+  # 方便全链路自动化调试（风格选择 / brief / narrative / visual_bible / shot_plan / storyboard）
+  auto_confirm_decisions: false

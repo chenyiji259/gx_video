@@ -1,0 +1,133 @@
+# VidMuse 视频生成 Provider 配置
+#
+# 当前接入：ToAPIs（Grok 视频模型），API key 配置在 config/base/external_apis.yaml
+# 默认 provider：grok_imagine_10_video（ProviderRegistry.get_default 取第一个 enabled）
+
+video_providers:
+
+  # ========================================================================
+  # Seedance 2.0（火山方舟 Ark） - doc 21 默认视频 provider
+  # ========================================================================
+  # 异步任务：POST /contents/generations/tasks → 轮询 → 拉视频 URL
+  # 支持首尾帧 i2v（doc 21 §3.2）：role=first_frame / role=last_frame
+  - name: seedance_2
+    display_name: Doubao Seedance 2.0 (高质量)
+    enabled: true
+    api_type: ark
+    endpoint: "https://ark.cn-beijing.volces.com/api/v3"
+    pricing_ref: image_to_video
+    generation_modes:
+      - image_to_video
+      - text_to_video
+    capabilities:
+      min_duration_sec: 4
+      max_duration_sec: 15
+      supported_durations: [4, 5, 6, 8, 10, 12, 15]
+      supported_aspect_ratios: ["16:9", "9:16", "1:1", "adaptive"]
+      supports_first_frame: true
+      supports_last_frame: true     # doc 21 §3.2 首尾帧 i2v 关键能力
+      supports_motion_strength: false
+      supports_camera_control: false
+      max_reference_images: 9
+      supports_audio_input: true
+      supports_video_input: true
+    default_params:
+      duration: 8
+      ratio: "9:16"
+      resolution: "1080p"
+      generate_audio: true
+      watermark: false
+    prompt_style: natural
+    field_mapping:
+      duration_sec: duration
+      aspect_ratio: ratio
+
+  # ========================================================================
+  # Seedance 2.0 Fast（火山方舟 Ark） - 速度+成本优化版
+  # ========================================================================
+  - name: seedance_2_fast
+    display_name: Doubao Seedance 2.0 Fast
+    enabled: true
+    api_type: ark
+    endpoint: "https://ark.cn-beijing.volces.com/api/v3"
+    pricing_ref: image_to_video
+    generation_modes:
+      - image_to_video
+      - text_to_video
+    capabilities:
+      min_duration_sec: 4
+      max_duration_sec: 15
+      supported_durations: [4, 5, 6, 8, 10, 12, 15]
+      # fast 版本只支持到 720p
+      supported_aspect_ratios: ["16:9", "9:16", "1:1", "adaptive"]
+      supports_first_frame: true
+      supports_last_frame: true
+      max_reference_images: 9
+      supports_audio_input: true
+      supports_video_input: true
+    default_params:
+      duration: 8
+      ratio: "9:16"
+      resolution: "1080p"
+      generate_audio: true
+      watermark: false
+    prompt_style: natural
+    field_mapping:
+      duration_sec: duration
+      aspect_ratio: ratio
+
+  # ========================================================================
+  # 旧 ToApis Grok 视频（保留但不再默认，可手动切换 enabled: true）
+  # ========================================================================
+  - name: grok_imagine_10_video
+    display_name: Grok Imagine 1.0 Video
+    enabled: false  # doc 21：已切换默认为 seedance_2
+    api_type: toapis
+    endpoint: "https://toapis.com/v1/videos/generations"
+    pricing_ref: image_to_video
+    generation_modes:
+      - image_to_video
+      - text_to_video
+    capabilities:
+      min_duration_sec: 6
+      max_duration_sec: 30
+      supported_aspect_ratios: ["16:9", "9:16", "1:1", "3:2", "2:3"]
+      supports_first_frame: true
+      supports_last_frame: false
+      supports_motion_strength: false
+      supports_camera_control: false
+      max_reference_images: 7
+    default_params:
+      duration: 6
+      aspect_ratio: "16:9"
+      quality: "720p"
+    prompt_style: natural
+    field_mapping:
+      duration_sec: duration
+
+  - name: grok_video_3
+    display_name: Grok Video 3
+    enabled: false  # doc 21：已切换默认为 seedance_2
+    api_type: toapis
+    endpoint: "https://toapis.com/v1/videos/generations"
+    pricing_ref: image_to_video
+    generation_modes:
+      - image_to_video
+      - text_to_video
+    capabilities:
+      min_duration_sec: 10
+      max_duration_sec: 15
+      supported_durations: [10, 15]
+      supported_aspect_ratios: ["16:9", "9:16"]
+      supports_first_frame: true
+      supports_last_frame: false
+      supports_motion_strength: false
+      supports_camera_control: false
+      max_reference_images: 1
+    default_params:
+      duration: 10
+      aspect_ratio: "16:9"
+      resolution: "1080P"
+    prompt_style: natural
+    field_mapping:
+      duration_sec: duration

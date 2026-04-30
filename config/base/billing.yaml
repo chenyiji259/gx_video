@@ -1,0 +1,60 @@
+# VidMuse 计费与 Credits 配置
+#
+# 工程约束（doc 08）：
+#   硬参数（价格、上限）放在代码配置里，不写在提示词里当知识。
+#
+# Credits 定价参考（doc 01 §13）：
+#   - 聊天/规划/文本改写：免费（不扣 credits）
+#   - 音频分析：按秒扣
+#   - 参考图/storyboard：按张扣
+#   - 图片转视频：按秒和分辨率扣
+#   - 导出：按分辨率和时长扣
+
+billing:
+  currency: credits
+  free_quota_per_user: 100   # 新用户初始免费 credits
+
+  tools:
+    # 音频工具
+    audio_analysis:
+      unit: per_30_seconds
+      price_per_unit: 2
+
+    # 图像工具
+    generate_reference_image:
+      unit: per_image
+      price_per_unit: 3
+
+    generate_storyboard_frame:
+      unit: per_frame
+      price_per_unit: 2
+
+    edit_image:
+      unit: per_call
+      price_per_unit: 3
+
+    # 视频工具
+    image_to_video:
+      unit: per_second
+      price_per_unit: 15
+
+    text_to_video:
+      unit: per_second
+      price_per_unit: 20
+
+    regenerate_shot:
+      unit: per_second
+      price_per_unit: 15
+
+    lipsync:
+      unit: per_second
+      price_per_unit: 25
+
+    # 导出
+    export_720p:
+      unit: per_minute
+      price_per_unit: 20
+
+    export_1080p:
+      unit: per_minute
+      price_per_unit: 40

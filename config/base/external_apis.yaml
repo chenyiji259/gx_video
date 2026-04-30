@@ -1,0 +1,55 @@
+# VidMuse 外部 API 凭据配置
+#
+# 工程约束（doc 08）：
+#   - 所有外部 API 的 key / base_url 均在此文件配置，代码只从 get_config() 读取
+#   - 绝不在代码中直接使用 os.getenv() 读取 API key
+#   - 此文件不进入版本控制（添加到 .gitignore）
+#
+# 使用方法：
+#   1. 将此文件复制为真实配置，填写对应 API key
+#   2. FAL.ai API key 可在 https://fal.ai 注册后获取
+
+external_apis:
+
+  # --------------------------------------------------------------------------
+  # ToAPIs — 中转服务（Grok 系列视频生成 + GPT Image 2 图片生成共用 API key）
+  #   - 视频：grok_imagine_10_video / grok_video_3
+  #   - 图片：gpt_image_2（doc 21 + docs/api/HarvAI 文档）
+  #   文档：https://docs.toapis.com
+  # --------------------------------------------------------------------------
+  toapis:
+    # API key 通过环境变量注入（在 .env 中设置 TOAPIS_API_KEY）
+    api_key: "${TOAPIS_API_KEY}"
+
+    # API 基础地址
+    base_url: "https://toapis.com"
+
+    # 请求超时（秒）：视频生成通常 1-10 分钟，图片生成 30s-2min
+    timeout: 660
+
+    # 轮询间隔（秒）
+    poll_interval: 10
+
+    # 最大轮询次数（660s / 10s = 66 次）
+    max_poll_attempts: 66
+
+  # --------------------------------------------------------------------------
+  # Ark — 火山方舟 Seedance 2.0 视频生成
+  #   支持 seedance_2 / seedance_2_fast
+  #   文档：docs/api/seedance2-video-generation-api.md
+  # --------------------------------------------------------------------------
+  ark:
+    # API key 通过环境变量注入（在 .env 中设置 ARK_API_KEY）
+    api_key: "${ARK_API_KEY}"
+
+    # 火山方舟 API 基础地址
+    base_url: "https://ark.cn-beijing.volces.com/api/v3"
+
+    # 请求超时（秒）：Seedance 视频生成通常 1-10 分钟
+    timeout: 660
+
+    # 轮询间隔（秒）：官方建议 10-30s
+    poll_interval: 15
+
+    # 最大轮询次数（660s / 15s ≈ 44 次，留余量取 50）
+    max_poll_attempts: 50

@@ -1,0 +1,29 @@
+# VidMuse 日志配置
+#
+# 工程约束（doc 08）：
+#   日志分四层：system / agent / tool / project
+#   统一 JSON 格式，包含 timestamp / level / module / project_id / task_id / event_type / message
+
+logging:
+  level: INFO           # DEBUG / INFO / WARNING / ERROR
+  format: json          # json（生产）或 text（调试用）
+
+  # 日志文件存放根目录（相对于项目根）
+  log_dir: logs
+
+  # loguru rotation / retention 策略
+  rotation: "100 MB"    # 单文件超过此大小时轮转
+  retention: "30 days"  # 保留最近 N 天日志
+
+  # 各层级子目录名
+  layers:
+    system: system      # 服务启动、全局异常、SSE 连接
+    agent: agent        # Agent 输入摘要、输出结构、决策路径
+    tool: tool          # Provider 调用、重试次数、产物路径
+    project: project    # 阶段推进、回退、stale 标记、重要决策
+
+  # stdout 输出（开发时可见）
+  stdout:
+    enabled: true
+    colorize: true
+    level: INFO

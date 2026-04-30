@@ -1,0 +1,40 @@
+# VidMuse 音频分析 Provider 配置
+#
+# 音频分析工具：BPM/beat 提取、段落切分、歌词时间对齐
+
+audio_providers:
+
+  - name: librosa_local
+    display_name: librosa（本地）
+    enabled: true
+    api_type: local_python        # 本地库，无需 API Key
+    endpoint: ""
+    pricing_ref: audio_analysis   # 对应 billing.yaml
+    capabilities:
+      bpm_detection: true
+      beat_tracking: true
+      section_segmentation: true
+      energy_curve: true
+      lyrics_alignment: false     # 由 whisperx 负责
+    default_params:
+      sr: 22050                   # 采样率
+      hop_length: 512
+    notes: "使用 librosa + essentia 做底层分析"
+
+  - name: whisperx_local
+    display_name: WhisperX（本地歌词对齐）
+    enabled: true
+    api_type: local_python
+    endpoint: ""
+    pricing_ref: audio_analysis
+    capabilities:
+      bpm_detection: false
+      beat_tracking: false
+      section_segmentation: false
+      energy_curve: false
+      lyrics_alignment: true      # forced alignment
+    default_params:
+      model: base                 # tiny / base / small / medium / large
+      language: auto
+      batch_size: 16
+    notes: "使用 WhisperX 做歌词时间对齐，需要 GPU 或 CPU 推理"

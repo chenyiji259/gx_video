@@ -1,0 +1,120 @@
+# VidMuse 图片生成 Provider 配置
+#
+# 当前接入：DashScope（qwen-image-2.0-pro 图生图 + z-image-turbo 文生图）
+# API key：DASHSCOPE_API_KEY 环境变量（与 LLM / Omni 共用同一 Key）
+# 默认 provider：qwen_img2img（ProviderRegistry.get_default 取第一个 enabled）
+
+image_providers:
+
+  # ========================================================================
+  # GPT Image 2（ToApis 中转） - doc 21 §1.4 默认图片 provider
+  # ========================================================================
+  # 九宫格主链路：按像素尺寸直传 size，并通过 metadata.resolution 标记 2K / 4K
+  # 当前默认策略：九宫格统一走 2K；尺寸由后端按项目方向映射
+  #   - 方屏：3072x3072
+  #   - 竖屏：1728x3072
+  #   - 横屏：3072x1728
+  # 异步任务：提交 → 轮询 → 拉取 URL（详见 docs/api/HarvAI 文档）
+  # API key 复用 toapis（与 grok 视频生成共用同一 key）
+  - name: gpt_image_2
+    display_name: GPT Image 2 (ToApis)
+    enabled: true
+    api_type: toapis
+    endpoint: "https://toapis.com/v1/images/generations"
+    task_query_url: "https://toapis.com/v1/images/generations"
+    model_name: "gpt-image-2"
+    pricing_ref: storyboard_image
+    generation_modes:
+      - text_to_image
+      - image_to_image
+    capabilities:
+      max_width: 3840
+      max_height: 3840
+      # 当前主链路按像素尺寸直传，supported_sizes 仅作常用预设说明
+      supported_sizes:
+        - "3072x3072"
+        - "1728x3072"
+        - "3072x1728"
+      resolution: "2K"
+      supports_negative_prompt: false
+      supports_reference_image: true
+      supports_multi_ref: true
+      max_reference_images: 3
+    default_params:
+      size: "3072x3072"
+      resolution: "2K"
+      orientation: "square"
+      n: 1
+    prompt_style: natural
+
+  # 图生图：qwen-image-2.0-pro（doc 21 决策 D1：deprecated，由 gpt_image_2 取代）
+  # 场景：用户已上传角色参考图 → 换装 / 细节丰富 / 补充
+  # 比例策略：跟随输入图比例（auto），默认兜底 3:4
+  - name: qwen_img2img
+    display_name: Qwen Image 2.0 Pro (图生图)
+    enabled: false  # doc 21 §1.4：已切换默认 provider 为 gpt_image_2
+    api_type: dashscope
+    endpoint: "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
+    task_query_url: "https://dashscope.aliyuncs.com/api/v1/tasks"
+    model_name: "qwen-image-2.0-pro"
+    pricing_ref: generate_reference_image
+    generation_modes:
+      - image_to_image
+    capabilities:
+      max_width: 1024
+      max_height: 1024
+      # qwen-image-2.0-pro 支持的尺寸（以 width*height 格式传参）
+      # 角色换装推荐 768*1024（3:4 竖向人像）；不建议 16:9（横屏裁角色）
+      # 官方推荐分辨率（像素范围 512~2048，实际输出对齐到 16 的倍数）
+      supported_sizes:
+        - "1024*1024"   # 1:1
+        - "1080*1440"   # 3:4  ← 角色换装默认（竖向人像）
+        - "960*1280"    # 3:4  较低分辨率备选
+        - "1440*1080"   # 4:3
+        - "1080*1920"   # 9:16
+        - "1920*1080"   # 16:9（不推荐用于角色）
+        - "2048*872"    # 21:9
+      supports_negative_prompt: true   # qwen-image-2.0-pro 支持负向提示词
+      supports_reference_image: true   # 图生图核心能力
+      supports_txt2img: true           # 也支持文生图（不传 image 即可）
+      auto_detect_ratio: true          # 自动跟随输入图比例
+    default_params:
+      size: "1080*1440"   # 默认 3:4，竖向人像
+      n: 1
+    prompt_style: natural
+
+  # 文生图：z-image（doc 21 决策 D1：deprecated，由 gpt_image_2 取代）
+  # 场景：用户未上传参考图 → 生成角色 / 场地
+  # 角色: 9:16（竖向，展示全身细节）；场地: 21:9（超宽银幕感）
+  - name: qwen_txt2img
+    display_name: Z-Image Turbo (文生图)
+    enabled: false  # doc 21 §1.4：已切换默认 provider 为 gpt_image_2
+    api_type: dashscope
+    endpoint: "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
+    task_query_url: "https://dashscope.aliyuncs.com/api/v1/tasks"
+    model_name: "z-image-turbo"
+    pricing_ref: generate_reference_image
+    generation_modes:
+      - text_to_image
+    capabilities:
+      max_width: 1024
+      max_height: 1024
+      # 官方推荐分辨率（默认 1024*1536，推荐像素 [1024*1024, 1536*1536]）
+      supported_sizes:
+        - "1080*1920"   # 9:16  ← 角色专用（高清全身像）
+        - "720*1280"    # 9:16  较低分辨率备选
+        - "2048*872"    # 21:9  ← 场地专用（超宽银幕）
+        - "1344*576"    # 21:9  较低分辨率备选
+        - "1024*1024"   # 1:1
+        - "1024*1536"   # 2:3
+        - "1080*1440"   # 3:4
+        - "1920*1080"   # 16:9
+      supports_negative_prompt: false  # z-image 不支持负向提示词
+      supports_reference_image: false
+    # 角色和场地用不同 size，调用时通过 params 覆盖
+    default_params:
+      size: "1080*1920"   # 默认角色比例 9:16（高清）
+      n: 1
+    scene_size: "2048*872"   # 场地专用 21:9（高清）
+    prompt_style: natural
+

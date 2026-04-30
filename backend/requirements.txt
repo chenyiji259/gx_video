@@ -1,0 +1,69 @@
+# VidMuse Backend Dependencies
+# Python 3.11+
+
+# Core Framework
+# langgraph 1.1.x 引入 type-safe streaming API（version="v2"），与 1.0.x 兼容
+# 如需固定兼容版本，可改为 langgraph==1.0.10
+langgraph>=1.0.10
+langchain>=1.2.12
+langchain-core>=1.2.0        # 直接使用 langchain_core.messages 等，必须显式列出
+langchain-openai>=1.1.11
+langsmith>=0.7.16
+
+# Web Framework
+fastapi>=0.127.0
+uvicorn[standard]>=0.34.0
+python-multipart>=0.0.18
+
+# Database
+sqlalchemy>=2.0.25
+psycopg2-binary>=2.9.9       # 供 Alembic 同步迁移使用
+psycopg[binary,pool]>=3.2.0  # 供 langgraph-checkpoint-postgres 使用
+asyncpg>=0.31.0
+langgraph-checkpoint-postgres>=2.0.24
+alembic>=1.14.0               # DB 迁移工具，settings.py 中已预留同步 URL
+
+# Cache & Queue
+# 注：任务队列使用 Redis BRPOP 直接实现（见 tasks/worker.py），无需 Celery
+redis>=5.2.0
+
+# Storage
+minio>=7.2.0
+aiofiles>=24.1.0
+
+# Audio Processing
+librosa>=0.10.2
+soundfile>=0.13.1
+scipy>=1.14.0                 # librosa 的间接依赖，显式列出以锁定稳定版本
+
+# Video/Image Processing
+# 注：视频合成直接调用 ffmpeg subprocess（见 ffmpeg_timeline_tool.py），不使用 moviepy
+# 注：opencv-python / Pillow 当前代码中无任何 import，已移除
+
+# LLM / AI
+# CRITICAL: langchain-openai>=1.1.0 要求 openai>=2.26.0（v2.x API），原 >=1.12.0 不兼容！
+openai>=2.26.0
+tiktoken>=0.12.0
+
+# Utilities
+pydantic>=2.7.4               # langchain-core>=1.2.x 要求 pydantic>=2.7.4
+python-jose[cryptography]>=3.3.0
+passlib[bcrypt]>=1.7.4
+python-dotenv>=1.0.1
+pyyaml>=6.0.2
+python-ulid>=2.0.0
+aiohttp>=3.9.3
+httpx>=0.28.0
+
+# Logging
+loguru>=0.7.3
+
+# Testing
+pytest>=8.3.0
+pytest-asyncio>=0.23.5
+pytest-cov>=4.1.0
+
+# Development Tools
+black>=24.2.0
+isort>=5.13.2
+ruff>=0.4.0

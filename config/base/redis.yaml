@@ -1,0 +1,19 @@
+# Redis Configuration
+
+redis:
+  # 服务器连接信息
+  host: 8.134.170.191
+  port: 6379
+  # 密码通过环境变量注入，不硬编码（在 .env 中设置 REDIS_PASSWORD=你的密码）
+  password: "${REDIS_PASSWORD}"
+
+  # 数据库编号
+  db: 0
+
+  # 连接池配置
+  pool:
+    max_connections: 50
+    timeout: 5
+
+  # 键前缀
+  key_prefix: "vidmuse:"

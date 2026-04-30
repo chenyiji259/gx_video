@@ -1,0 +1,7 @@
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://hangzhou.cstext.top:54352",
+    "ANTHROPIC_AUTH_TOKEN": "sk-ca2c9814-151c-497a-b619-91bfeb530c3a"
+  },
+  "hasCompletedOnboarding": true
+}

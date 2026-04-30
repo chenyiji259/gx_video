@@ -1,0 +1,49 @@
+# VidMuse LLM 配置
+#
+# 工程约束（doc 08）：
+#   - API key 必须通过环境变量注入，绝不硬编码
+#   - provider / model 可以切换而无需改代码
+#
+# 当前配置：千问文本模型（百炼平台 OpenAI 兼容接口）
+# 用途：Director Agent / CreativePlanningAgent / NarrativeScriptAgent 等文本生成任务
+#
+# 注：Qwen Omni 音频分析模型配置在 config/providers/omni.yaml 中，与本文件相互独立。
+
+llm:
+  # AI 供应商
+  provider: openai  # 百炼兼容 OpenAI 協议，provider 字段可保持 openai
+
+  # 模型名称（百炼平台文本+视觉模型）
+  # 可选范围：
+  #   qwen3.6-plus     — 当前使用版本（用户指定）
+  #   qwen3.5-plus     — 上代文本+图片理解
+  #   qwen3.5-flash    — 速度更快、成本更低，图片理解稍弱
+  #   qwen-plus        — 旧版稳定，无思考模式，适合打高安全牌
+  model: qwen3.6-plus
+
+  # 开关思考模式（Thinking Mode）
+  # qwen3.5-plus 默认开启思考，会在 JSON 回复前输出 <think>...</think>块，直接破坏 JSON 解析
+  # VidMuse 所有文本 Agent 必须将此值设为 false
+  enable_thinking: false
+
+  # 百炼平台 OpenAI 兼容接口地址
+  # 中国内地（北京）→ 使用该地域的 API Key
+  base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+  # 国际（新加坡）：
+  # base_url: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+
+  # API key 来源的环境变量名（填写环境变量名，不是 key 的值！）
+  # 实际 key 值在项目根目录的 .env 文件中以 DASHSCOPE_API_KEY=sk-xxx 形式存放
+  api_key_env: DASHSCOPE_API_KEY
+
+  # 生成参数
+  temperature: 0.3       # 较低温度保证输出稳定
+  max_tokens: 4096       # Director 回复 + 剧本生成，需要足够长度
+
+  # 请求超时（秒）
+  timeout: 120           # 针对剩本/镜头生成等长任务适当增大
+
+  # shot plan 专用 max_tokens 基础値（16-02）
+  # 实际应用 = max(max_tokens_shot_plan, max_shots * 250)
+  # 80 shots 尚需 20000 token，第一寄拿 8192 做下界保障短歌曲不截断
+  max_tokens_shot_plan: 8192

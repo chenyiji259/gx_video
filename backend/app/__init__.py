@@ -1,0 +1,1 @@
+"""VidMuse application package"""

@@ -1,0 +1,21 @@
+# PostgreSQL Database Configuration
+
+database:
+  # 服务器连接信息
+  host: localhost
+  port: 5432
+  username: postgres
+  password: "${POSTGRES_PASSWORD}"
+  database: vidmuse
+
+  # 连接池配置
+  # 30-40 并发用户，每个请求占用 1 个连接，额外预留 Worker / OutboxPublisher 用的连接
+  pool:
+    min_size: 5
+    max_size: 60
+    timeout: 30
+
+  # 连接健康检查
+  health_check:
+    interval: 60
+    timeout: 5
