@@ -50,6 +50,7 @@ from app.repositories.project_repository import ProjectRepository
 from app.repositories.unit_of_work import UnitOfWork
 from app.repositories.visual_bible_repository import CharacterSetVersionRepository
 from app.schemas.project import ActiveVersions, CharacterRef, ProjectSnapshot, SceneRef
+from app.services.asset_access_service import build_asset_access_url, build_asset_access_url_map
 from app.services.intent_resolution_service import IntentResolutionService
 from app.tools.director.director_tools import create_decision_for_action
 from app.tools.shared.artifact_tools import build_ref_from_asset_latest
@@ -215,11 +216,7 @@ async def load_project_snapshot(state: ProjectGraphState) -> dict:
                     _url_map: dict[str, str] = {}
                     if _active_asset_ids:
                         _ref_assets = await asset_repo.list_by_ids(_active_asset_ids)
-                        _url_map = {
-                            a.id: (a.storage_uri or "")
-                            for a in _ref_assets
-                            if a.storage_uri
-                        }
+                        _url_map = await build_asset_access_url_map(_ref_assets)
                     _character_refs = [
                         CharacterRef(
                             character_id=c.character_id,
@@ -323,9 +320,11 @@ async def load_project_snapshot(state: ProjectGraphState) -> dict:
             image_ref_assets = await asset_repo.list_by_project(
                 project_id, asset_type="image_reference", limit=3
             )
-            reference_image_urls: list[str] = [
-                a.storage_uri for a in image_ref_assets if a.storage_uri
-            ]
+            reference_image_urls: list[str] = []
+            for asset in image_ref_assets:
+                url = await build_asset_access_url(asset)
+                if url:
+                    reference_image_urls.append(url)
 
             # doc11 批次2：加载激活的 audio_original URL
             audio_url: str | None = None
@@ -335,7 +334,7 @@ async def load_project_snapshot(state: ProjectGraphState) -> dict:
                     project_id, asset_type="audio_original", limit=1
                 )
                 if audio_assets:
-                    audio_url = audio_assets[0].storage_uri or None
+                    audio_url = await build_asset_access_url(audio_assets[0])
 
             selected_decisions = [
                 _decision_obj_to_dict(d)

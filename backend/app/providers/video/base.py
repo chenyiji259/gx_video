@@ -19,7 +19,7 @@ from app.core.provider_registry import get_provider_registry
 # 类型定义
 # ---------------------------------------------------------------------------
 
-VideoGenerationMode = Literal["image_to_video", "text_to_video", "video_to_video"]
+VideoGenerationMode = Literal["image_to_video", "text_to_video", "video_to_video", "multi_image_fusion"]
 
 
 # ---------------------------------------------------------------------------
@@ -64,7 +64,7 @@ class VideoProviderAdapter(Protocol):
 
         Args:
             prompt:               正向提示词（英文）。
-            mode:                 生成模式（image_to_video / text_to_video / video_to_video）。
+            mode:                 生成模式（image_to_video / text_to_video / video_to_video / multi_image_fusion）。
             negative_prompt:      负向提示词（部分 provider 不支持，忽略即可）。
             reference_image_url:  参考起始帧图片 URL（image_to_video 模式必须提供）。
             params:               provider 特定参数（duration / cfg_scale 等）。

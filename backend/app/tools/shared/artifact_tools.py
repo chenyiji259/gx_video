@@ -28,6 +28,7 @@ import json
 from hashlib import sha256
 from pathlib import Path
 from typing import Optional
+from urllib.parse import unquote, urlparse
 
 from app.core.logging import get_logger
 from app.models.asset import Asset
@@ -68,7 +69,7 @@ def make_artifact_ref(
     *,
     asset_id: str = "",
     summary: str = "",
-    minio_uri: str = "",
+    storage_uri: str = "",
 ) -> dict:
     """构造标准 ArtifactRef dict。
 
@@ -76,7 +77,7 @@ def make_artifact_ref(
       artifact_id   — 版本标识，如 "creative_brief_v1"
       artifact_type — 产物类型
       local_path    — 本地文件路径（字符串，便于 JSON 序列化）
-      minio_uri     — MinIO 永久直链（可为空）
+      storage_uri   — 对象存储访问地址（可为空）
       version_no    — 版本号
       summary       — 简短摘要，不含全文
     """
@@ -85,7 +86,8 @@ def make_artifact_ref(
         "artifact_type": artifact_type,
         "asset_id":      asset_id,
         "local_path":    str(local_path),
-        "minio_uri":     minio_uri,
+        "storage_uri":   storage_uri,
+        "minio_uri":     storage_uri,
         "version_no":    version_no,
         "summary":       summary,
     }
@@ -119,8 +121,20 @@ def _build_ref_from_asset(asset: Asset, *, summary: str = "") -> dict:
         version_no=version_no,
         asset_id=asset.id,
         summary=resolved_summary,
-        minio_uri=asset.storage_uri,
+        storage_uri=asset.storage_uri,
     )
+
+
+def _extract_object_key_from_storage_uri(storage_uri: str) -> str:
+    """从对象存储 URL 中提取 object_key。"""
+    parsed = urlparse(storage_uri)
+    path = unquote(parsed.path or "").lstrip("/")
+    if not path:
+        return ""
+    parts = path.split("/", 1)
+    if len(parts) == 2 and "." not in (parsed.netloc or ""):
+        return parts[1]
+    return path
 
 
 async def _persist_artifact_asset(
@@ -131,14 +145,10 @@ async def _persist_artifact_asset(
     local_path: Path,
     summary: str,
     object_key: str,
-    minio_uri: str,  # DESIGN-10: minio_uri 必须为有效 MinIO URL，调用前已经确保上传成功
+    storage_uri: str,
 ) -> dict:
-    """DESIGN-10 修复：仅在 MinIO 上传成功后才调用此方法。
-
-    Asset 表仅登记已成功上传 MinIO 的资产，确保 storage_uri 是
-    有效的 MinIO 永久直链，供前端展示使用。
-    """
-    from app.storage.minio_adapter import get_storage
+    """仅在对象存储上传成功后才调用此方法。"""
+    from app.storage.storage_factory import get_storage
     storage = get_storage()
     bucket_name = storage.default_bucket
 
@@ -159,7 +169,7 @@ async def _persist_artifact_asset(
             asset_type=artifact_type,
             bucket_name=bucket_name,
             object_key=object_key,
-            storage_uri=minio_uri,
+            storage_uri=storage_uri,
             mime_type="application/json",
             size_bytes=len(file_bytes),
             sha256=sha256(file_bytes).hexdigest(),
@@ -179,16 +189,16 @@ async def _persist_artifact_asset(
 async def read_artifact(artifact_ref: dict) -> dict:
     """从本地文件读取产物 JSON 内容。
 
-    优先读取 local_path（本地文件），若不存在则尝试 MinIO 降级。
+    优先读取 local_path（本地文件），若不存在则尝试对象存储降级。
 
     Args:
-        artifact_ref: ArtifactRef dict，至少含 local_path 或 minio_uri 之一。
+        artifact_ref: ArtifactRef dict，至少含 local_path 或 storage_uri 之一。
 
     Returns:
         产物完整内容（JSON dict）。
 
     Raises:
-        FileNotFoundError: 本地文件和 MinIO 均不可读时抛出。
+        FileNotFoundError: 本地文件和对象存储均不可读时抛出。
     """
     artifact_id = artifact_ref.get("artifact_id", "unknown")
     local_path_str = artifact_ref.get("local_path", "")
@@ -232,34 +242,36 @@ async def read_artifact(artifact_ref: dict) -> dict:
                         event_type="artifact_read_local_fallback_failed",
                     )
 
-    # 降级：MinIO 下载
-    minio_uri = artifact_ref.get("minio_uri", "")
-    if minio_uri:
+    # 降级：对象存储下载
+    storage_uri = artifact_ref.get("storage_uri") or artifact_ref.get("minio_uri", "")
+    if storage_uri:
         try:
-            from app.storage.minio_adapter import get_storage
+            from app.storage.storage_factory import get_storage
             storage = get_storage()
-            # minio_uri 格式: http://host/bucket/object_key
-            # 提取 object_key：去掉协议 + host + bucket 三段
-            parts = minio_uri.split("/", 4)  # ['http:', '', 'host', 'bucket', 'key...']
-            if len(parts) >= 5:
-                object_key = parts[4]
+            object_key = artifact_ref.get("object_key") or _extract_object_key_from_storage_uri(storage_uri)
+            bucket_name = artifact_ref.get("bucket_name")
+            if object_key:
                 import asyncio
-                data_bytes = await asyncio.to_thread(storage.download_bytes, object_key)
+                data_bytes = await asyncio.to_thread(
+                    storage.download_bytes,
+                    object_key,
+                    bucket=bucket_name,
+                )
                 content = json.loads(data_bytes.decode("utf-8"))
                 _logger.info(
-                    f"read_artifact MinIO 降级读取: {artifact_id!r}",
-                    event_type="artifact_read_minio",
+                    f"read_artifact 对象存储降级读取: {artifact_id!r}",
+                    event_type="artifact_read_storage",
                 )
                 return content
         except Exception as exc:
             _logger.warning(
-                f"read_artifact MinIO 降级失败: {artifact_id!r} exc={exc!r}",
-                event_type="artifact_read_minio_failed",
+                f"read_artifact 对象存储降级失败: {artifact_id!r} exc={exc!r}",
+                event_type="artifact_read_storage_failed",
             )
 
     raise FileNotFoundError(
-        f"产物 {artifact_id!r} 不可读：本地文件不存在且 MinIO 降级失败。"
-        f" local_path={local_path_str!r} minio_uri={minio_uri!r}"
+        f"产物 {artifact_id!r} 不可读：本地文件不存在且对象存储降级失败。"
+        f" local_path={local_path_str!r} storage_uri={storage_uri!r}"
     )
 
 
@@ -274,9 +286,9 @@ async def write_artifact(
     version_no: int,
     *,
     summary: str = "",
-    upload_to_minio: bool = True,
+    upload_to_storage: bool = True,
 ) -> dict:
-    """将产物写入本地文件（可选上传 MinIO），返回 ArtifactRef。
+    """将产物写入本地文件（可选上传对象存储），返回 ArtifactRef。
 
     用于 Sub-agent 完成生成后持久化产物。
     文本产物会额外登记 Asset 记录，返回 DB-backed ArtifactRef。
@@ -287,7 +299,7 @@ async def write_artifact(
         artifact_type:   产物类型（用于路径映射和 artifact_id 生成）。
         version_no:      版本号。
         summary:         产物摘要（不含全文，写入 ArtifactRef）。
-        upload_to_minio: 是否上传 MinIO（默认 True，失败不阻塞业务）。
+        upload_to_storage: 是否上传对象存储（默认 True，失败不阻塞业务）。
 
     Returns:
         ArtifactRef dict。
@@ -306,9 +318,9 @@ async def write_artifact(
         event_type="artifact_written_local",
     )
 
-    # DESIGN-10 修复：仅在 MinIO 上传成功时才写入 Asset 表。
+    # 仅在对象存储上传成功时才写入 Asset 表。
     # 上传失败时返回本地 ArtifactRef，不写任何 Asset 记录（避免前端收到无法访问的本地路径）。
-    if not upload_to_minio:
+    if not upload_to_storage:
         local_ref = make_artifact_ref(
             artifact_type, local_path, version_no, summary=summary
         )
@@ -319,7 +331,7 @@ async def write_artifact(
         return local_ref
 
     try:
-        from app.storage.minio_adapter import get_storage
+        from app.storage.storage_factory import get_storage
         storage = get_storage()
         object_key = (
             f"projects/{project_id}/artifacts/"
@@ -329,12 +341,12 @@ async def write_artifact(
         await storage.async_upload_bytes(
             object_key, file_bytes, content_type="application/json"
         )
-        minio_uri = storage.get_permanent_url(object_key)
+        storage_uri = storage.get_permanent_url(object_key)
         _logger.info(
-            f"write_artifact MinIO 上传成功: {artifact_type!r} key={object_key!r}",
-            event_type="artifact_uploaded_minio",
+            f"write_artifact 对象存储上传成功: {artifact_type!r} key={object_key!r}",
+            event_type="artifact_uploaded_storage",
         )
-        # MinIO 成功→写 Asset 表，返回 DB-backed ArtifactRef
+        # 上传成功→写 Asset 表，返回 DB-backed ArtifactRef
         ref = await _persist_artifact_asset(
             project_id=project_id,
             artifact_type=artifact_type,
@@ -342,7 +354,7 @@ async def write_artifact(
             local_path=local_path,
             summary=summary,
             object_key=object_key,
-            minio_uri=minio_uri,
+            storage_uri=storage_uri,
         )
         _logger.debug(
             f"write_artifact 完成: artifact_id={ref['artifact_id']!r}",
@@ -350,10 +362,10 @@ async def write_artifact(
         )
         return ref
     except Exception as exc:
-        # MinIO 失败→不写 Asset 记录，仅返回本地引用
+        # 上传失败→不写 Asset 记录，仅返回本地引用
         _logger.warning(
-            f"write_artifact MinIO 上传失败，返回本地 ArtifactRef（Asset 表未写入）: {exc!r}",
-            event_type="artifact_minio_upload_failed",
+            f"write_artifact 对象存储上传失败，返回本地 ArtifactRef（Asset 表未写入）: {exc!r}",
+            event_type="artifact_storage_upload_failed",
         )
         local_ref = make_artifact_ref(
             artifact_type, local_path, version_no, summary=summary
@@ -370,7 +382,7 @@ async def write_artifact(
 # ---------------------------------------------------------------------------
 
 async def get_asset_url(asset_id: str) -> str:
-    """根据 asset_id 查询媒体资产的永久 URL（MinIO 直链）。
+    """根据 asset_id 查询媒体资产的访问 URL。
 
     用途：Sub-agent 需要把已存在的角色图/场景图 URL 传给生成工具时调用。
 
@@ -378,18 +390,19 @@ async def get_asset_url(asset_id: str) -> str:
         asset_id: Asset 表记录的 ID。
 
     Returns:
-        storage_uri 永久直链字符串；查询失败或不存在时返回空字符串。
+        访问 URL 字符串；查询失败或不存在时返回空字符串。
     """
     try:
         from app.repositories.asset_repository import AssetRepository
         from app.repositories.unit_of_work import UnitOfWork
+        from app.services.asset_access_service import build_asset_access_url
 
         async with UnitOfWork() as uow:
             asset = await AssetRepository(uow.session).get_by_id(asset_id)
 
         if asset is None:
             return ""
-        return asset.storage_uri or ""
+        return await build_asset_access_url(asset) or ""
 
     except Exception as exc:
         _logger.warning(
@@ -412,7 +425,7 @@ try:
 
     @_lc_tool
     async def read_artifact_tool(artifact_ref_json: str) -> str:
-        """Read artifact content from local file or MinIO by ArtifactRef.
+        """Read artifact content from local file or object storage by ArtifactRef.
 
         Pass the ArtifactRef as a JSON string.
         Returns the full artifact content as a JSON string.
@@ -437,7 +450,7 @@ try:
         version_no: int,
         summary: str = "",
     ) -> str:
-        """Persist artifact content to local file and MinIO, return ArtifactRef JSON.
+        """Persist artifact content to local file and object storage, return ArtifactRef JSON.
 
         Args:
             content_json: artifact content as a JSON string.
@@ -467,7 +480,7 @@ try:
 
     @_lc_tool
     async def get_asset_url_tool(asset_id: str) -> str:
-        """Get the permanent MinIO URL for a media asset by its asset_id.
+        """Get the current access URL for a media asset by its asset_id.
 
         Returns URL string, or empty string if not found.
         """

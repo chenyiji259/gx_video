@@ -164,7 +164,7 @@ export const assetService = {
     return response.data;
   },
   
-  uploadToMinio: async (uploadUrl: string, file: File) => {
+  uploadToStorage: async (uploadUrl: string, file: File) => {
     const response = await fetch(uploadUrl, {
       method: 'PUT',
       body: file,
@@ -173,7 +173,7 @@ export const assetService = {
       },
     });
     if (!response.ok) {
-      throw new Error(`Failed to upload to MinIO: ${response.statusText}`);
+      throw new Error(`Failed to upload to object storage: ${response.statusText}`);
     }
     return true;
   },
@@ -193,7 +193,7 @@ export const assetService = {
     if (!initRes.success) throw new Error('Failed to init upload');
     const { asset_id, object_key, bucket_name, upload_url } = initRes.data;
 
-    await assetService.uploadToMinio(upload_url, file);
+    await assetService.uploadToStorage(upload_url, file);
 
     const completeRes = await assetService.completeUpload(projectId, {
       asset_id,

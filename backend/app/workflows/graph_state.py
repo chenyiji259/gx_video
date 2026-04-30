@@ -138,7 +138,7 @@ class ProjectGraphState(TypedDict, total=False):
     # 产物引用字段（ArtifactRef，docs/12 偏差 6 §6.2.2）
     # 每个字段是 ArtifactRef dict 或 None，结构：
     #   {"artifact_id": str, "artifact_type": str, "local_path": str,
-    #    "minio_uri": str, "version_no": int, "summary": str}
+    #    "storage_uri": str, "version_no": int, "summary": str}
     # 传递引用而非原文内容，Director 需要审核时主动调用 read_artifact(ref)。
     # ------------------------------------------------------------------ #
 

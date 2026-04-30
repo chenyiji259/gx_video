@@ -65,7 +65,7 @@ async def read_artifact_for_review(artifact_ref: dict) -> str:
     同时避免不必要的 prompt 超长。
 
     Args:
-        artifact_ref: ArtifactRef dict（含 local_path / minio_uri 等）。
+        artifact_ref: ArtifactRef dict（含 local_path / storage_uri 等）。
 
     Returns:
         产物内容的字符串表示（JSON，截取 6000 字符）；

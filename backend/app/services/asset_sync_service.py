@@ -4,7 +4,7 @@
 
 职责：
   在资产上传完成（complete_upload）后，
-  将 MinIO 中的文件下载一份副本到本地 data/projects/{id}/01_input/，
+  将对象存储中的文件下载一份副本到本地 data/projects/{id}/01_input/，
   同时写入元数据 JSON 供调试和问题排查使用。
 
 设计决策：
@@ -23,7 +23,7 @@ from typing import Optional
 from app.core.logging import get_project_logger
 from app.models.asset import Asset
 from app.storage.local_artifact_store import LocalArtifactStore
-from app.storage.minio_adapter import get_storage
+from app.storage.storage_factory import get_storage
 from app.storage.path_planner import ArtifactStage
 
 # 只同步这几类资产到 01_input/（用户上传的输入素材）
@@ -31,10 +31,10 @@ _SYNC_ASSET_TYPES = frozenset(["audio_original", "image_reference", "style_refer
 
 
 class AssetSyncService:
-    """将 MinIO 资产副本同步到本地追溯目录。"""
+    """将对象存储资产副本同步到本地追溯目录。"""
 
     async def sync(self, asset: Asset) -> Optional[Path]:
-        """从 MinIO 下载资产副本到本地 01_input/，并写入元数据 JSON。
+        """从对象存储下载资产副本到本地 01_input/，并写入元数据 JSON。
 
         只同步 audio_original / image_reference / style_reference 类型。
         其他类型（clip_video、storyboard_frame 等）由各自生成服务负责追溯。
@@ -60,7 +60,7 @@ class AssetSyncService:
             f"{asset.asset_type}_{asset.id}.{ext}"
         )
 
-        # 从 MinIO 下载（同步 IO 包装为异步）
+        # 从对象存储下载（同步 IO 包装为异步）
         storage = get_storage()
         try:
             await asyncio.to_thread(
@@ -71,7 +71,7 @@ class AssetSyncService:
             )
         except Exception as exc:
             logger.warning(
-                f"MinIO 下载失败: key={asset.object_key!r} err={exc}",
+                f"对象存储下载失败: key={asset.object_key!r} err={exc}",
                 event_type="asset_sync_download_failed",
             )
             raise

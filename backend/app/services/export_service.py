@@ -26,7 +26,7 @@ from app.repositories.timeline_repository import TimelineVersionRepository
 from app.repositories.unit_of_work import UnitOfWork
 from app.services.state_transition_service import state_transition_service
 from app.storage.local_artifact_store import LocalArtifactStore
-from app.storage.minio_adapter import get_storage
+from app.storage.storage_factory import get_storage
 from app.storage.path_planner import ArtifactStage
 from app.tools.ffmpeg_timeline_tool import (
     FFmpegNotAvailableError,

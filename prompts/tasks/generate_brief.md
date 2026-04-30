@@ -30,9 +30,10 @@ variables:
 1. **严格按 system prompt 的 JSON 结构**输出（含 creative_brief / style_bible / extension 三个根键）
 2. **extension 字段必须含完整算法计算结果**：
    - `allowed_shot_durations_sec` 必须写成当前视频模型支持的时长档位数组
-   - `shot_count` 由内容复杂度和目标时长共同决定，不再固定按 10 秒切分
-   - `grid_count = ceil(shot_count / 8)`
-   - `total_shots_generated = shot_count`
+   - 当前版本固定输出 `shot_count = 3`
+   - 当前版本固定输出 `grid_count = 1`
+   - 当前版本固定输出 `total_shots_generated = 3`
+   - `shot_duration_sec` 默认按 10 秒规划
 3. **character_list 中每个角色的 appearance 必须详细**——后续九宫格 prompt 会引用，外貌不一致会导致跨 cell 角色漂移
 4. **不输出任何解释文字、markdown 标记或代码块包裹**——纯 JSON 字符串
 

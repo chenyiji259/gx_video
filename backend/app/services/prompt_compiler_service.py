@@ -44,6 +44,7 @@ from app.repositories.project_spec_repository import ProjectSpecRepository
 from app.repositories.visual_bible_repository import CharacterSetVersionRepository
 from app.repositories.prompt_bundle_repository import PromptBundleRepository
 from app.schemas.prompt import PromptBundle
+from app.services.asset_access_service import build_asset_access_url
 from app.storage.local_artifact_store import LocalArtifactStore
 from app.storage.path_planner import ArtifactStage
 from app.utils.ids import generate_ulid
@@ -372,6 +373,7 @@ def _make_fallback_bundle(
     provider_name: str,
     *,
     ref_image_url: str | None = None,
+    ref_image_urls: list[str] | None = None,
     ref_asset_ids: list[str] | None = None,
     human_on_camera: bool | None = None,
 ) -> dict[str, Any]:
@@ -414,6 +416,8 @@ def _make_fallback_bundle(
     }
     if ref_image_url:
         result["reference_image_url"] = ref_image_url
+    if ref_image_urls:
+        result["reference_image_urls"] = list(ref_image_urls)
     return result
 
 
@@ -480,8 +484,10 @@ class PromptCompilerService:
         *,
         target_type: str = "storyboard_frame",
         generation_mode: str = "image_to_video",
-        first_frame_description: str | None = None,
-        last_frame_description: str | None = None,
+        start_frame_description: str | None = None,
+        middle_frame_description: str | None = None,
+        end_frame_description: str | None = None,
+        video_reference_image_urls: list[str] | None = None,
     ) -> PromptBundle:
         """为指定 shot 编译 PromptBundle 并落库。
 
@@ -545,7 +551,7 @@ class PromptCompilerService:
             if not asset_id_val:
                 return None
             a = await asset_repo.get_by_id_for_project(asset_id_val, project_id)
-            return a.storage_uri if a and a.storage_uri else None
+            return await build_asset_access_url(a)
 
         # 1. 场景参考图（定义场景环境与构图基底）
         scene_url = await _load_url(scene_ref_id)
@@ -608,6 +614,11 @@ class PromptCompilerService:
             provider_profile = registry.get_default("image")
             provider_name = provider_profile.name if provider_profile else "flux_schnell"
 
+        if is_video_target and video_reference_image_urls:
+            ref_image_urls = list(video_reference_image_urls)
+            ref_image_url = ref_image_urls[0] if ref_image_urls else None
+            ref_assets_text = f"视频参考图 {len(ref_image_urls)} 张（起始 / 中间 / 结尾）"
+
         # ---- 步骤 2.5: 构建角色描述文字（供 prompt 编译 LLM 使用） -----------------
         # 从 CharacterSetVersion 提取匹配角色的名字/外貌/造型描述
         char_set_text = "（暂无角色绑定）"
@@ -644,10 +655,12 @@ class PromptCompilerService:
             generation_mode=generation_mode,
             ref_assets_text=ref_assets_text,
             ref_image_url=ref_image_url,    # 将参考图 URL 传入，准认工具底也显式保留
+            ref_image_urls=ref_image_urls,
             ref_asset_ids=ref_asset_ids,    # 将全部参考图 ID 传入，准认工具底也显式保留
             character_set_text=char_set_text,  # 角色描述文字（外貌/造型）
-            first_frame_description=first_frame_description,  # doc 21 §3.2 i2v 首帧
-            last_frame_description=last_frame_description,    # doc 21 §3.2 i2v 尾帧
+            start_frame_description=start_frame_description,
+            middle_frame_description=middle_frame_description,
+            end_frame_description=end_frame_description,
         )
 
         # ---- 步骤 4: 构建 PromptBundle schema ----------------------------------------
@@ -666,7 +679,17 @@ class PromptCompilerService:
             reference_image_url=ref_image_url,          # 向后兼容，单图主参考
             reference_image_urls=ref_image_urls,        # 多参考图列表（场景→造型→角色）
             reference_weight=0.75,
-            params=rendered_result.get("params", {}),
+            params={
+                **(rendered_result.get("params", {}) or {}),
+                **(
+                    {
+                        "video_reference_mode": generation_mode,
+                        "reference_image_urls": ref_image_urls,
+                    }
+                    if is_video_target and ref_image_urls
+                    else {}
+                ),
+            },
             source_brief_version_id=brief.id if brief else None,
             source_style_version_id=style.id if style else None,
         )
@@ -736,10 +759,12 @@ class PromptCompilerService:
         generation_mode: str = "image_to_video",
         ref_assets_text: str = "（无参考素材）",
         ref_image_url: str | None = None,
+        ref_image_urls: list[str] | None = None,
         ref_asset_ids: list[str] | None = None,
         character_set_text: str = "（暂无角色绑定）",
-        first_frame_description: str | None = None,
-        last_frame_description: str | None = None,
+        start_frame_description: str | None = None,
+        middle_frame_description: str | None = None,
+        end_frame_description: str | None = None,
     ) -> dict[str, Any]:
         """渲染 compile_*_prompt.md 并调用 LLM，失败时兑底。
 
@@ -770,9 +795,9 @@ class PromptCompilerService:
                 shot=shot,
                 spec=spec,
             )
-            # doc 21 §3.2：i2v 模式接受首尾帧描述（来自九宫格切分图所对应的 narrative shot）
-            base_vars["first_frame_description"] = first_frame_description or "（无首帧描述）"
-            base_vars["last_frame_description"] = last_frame_description or "（无尾帧描述）"
+            base_vars["start_frame_description"] = start_frame_description or "（无起始帧描述）"
+            base_vars["middle_frame_description"] = middle_frame_description or "（无中间帧描述）"
+            base_vars["end_frame_description"] = end_frame_description or "（无结尾帧描述）"
 
         try:
             # 渲染 prompt 模板
@@ -814,6 +839,7 @@ class PromptCompilerService:
             brief=brief,
             provider_name=provider_name,
             ref_image_url=ref_image_url,
+            ref_image_urls=ref_image_urls,
             ref_asset_ids=ref_asset_ids,
             human_on_camera=human_on_camera,
         )

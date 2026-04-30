@@ -1,22 +1,22 @@
 """Asset Service — 资产上传与查询业务逻辑。
 
-来源文档：doc 05 §9（资产接口）、doc 05 §9.3（MinIO Key 规范）
+来源文档：doc 05 §9（资产接口）、doc 05 §9.3（对象存储 Key 规范）
 
-上传流程（两步式，客户端直传 MinIO）：
+上传流程（两步式，客户端直传对象存储）：
   Step 1 - upload_init():
-    后端生成 MinIO PUT 预签名 URL（30 分钟有效），
-    客户端直接 PUT 到 MinIO，无需经后端中转（避免大文件占用后端带宽）。
+    后端生成对象存储 PUT 预签名 URL（30 分钟有效），
+    客户端直接 PUT 到对象存储，无需经后端中转（避免大文件占用后端带宽）。
 
   Step 2 - complete_upload():
     客户端上传完成后通知后端。
-    后端从 MinIO 获取对象元信息（size、etag 等）、落库 Asset 记录，
+    后端从对象存储获取对象元信息（size、etag 等）、落库 Asset 记录，
     并触发 AssetSyncService 将文件副本同步到本地 01_input/ 目录。
 
-MinIO Object Key 规范（doc 05 §9.3）：
+对象存储 Key 规范（doc 05 §9.3）：
     projects/{project_id}/assets/{asset_type}/{asset_id}/{filename}
 
 storage_uri 格式（DB 存储永久直链，API 返回签名链接）：
-    DB: http://{minio_endpoint}/{bucket}/projects/{project_id}/assets/{type}/{id}/{filename}
+    DB: {storage_public_base_url}/projects/{project_id}/assets/{type}/{id}/{filename}
     API 响应: 动态生成的签名链接（presigned URL），有效期由 config.storage.presigned_expiry 控制
 """
 from __future__ import annotations
@@ -29,7 +29,7 @@ from app.models.asset import Asset
 from app.repositories.asset_repository import AssetRepository
 from app.repositories.project_repository import ProjectRepository
 from app.repositories.unit_of_work import UnitOfWork
-from app.storage.minio_adapter import get_storage
+from app.storage.storage_factory import get_storage
 from app.utils.ids import generate_ulid
 
 # 允许上传的 MIME 类型映射到 asset_type
@@ -118,14 +118,10 @@ def _asset_to_dict(asset: Asset, *, presigned_url: str = "") -> dict:
 async def _asset_to_dict_presigned(asset: Asset) -> dict:
     """返回带签名链接的 asset dict。
 
-    对图片/视频/音频类型动态生成签名链接（有效期由 config.storage.presigned_expiry 控制）。
-    文本类资产（application/json 等）保持永久直链。
+    私有 OSS 场景下，统一优先返回签名链接。
     签名生成失败时降级为永久直链。
     """
-    _MEDIA_PREFIXES = ("image/", "video/", "audio/")
-    mime = (asset.mime_type or "").lower()
-
-    if any(mime.startswith(p) for p in _MEDIA_PREFIXES) and asset.object_key:
+    if asset.object_key:
         try:
             storage = get_storage()
             presigned = await storage.async_get_presigned_url(

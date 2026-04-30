@@ -34,8 +34,9 @@ class RedisConfig(BaseModel):
 
 
 class StorageConfig(BaseModel):
-    """MinIO / S3 Compatible Storage configuration."""
-    endpoint: str                    # "host:port"
+    """对象存储配置。"""
+    endpoint: str
+    public_base_url: str = ""
     access_key: str
     secret_key: str
     bucket: str
@@ -176,6 +177,15 @@ def load_redis_config() -> RedisConfig:
     config_path = get_config_dir() / "redis.yaml"
     data = load_yaml_config(str(config_path))
     redis_data = data.get("redis", {})
+    profiles = redis_data.get("profiles")
+    if isinstance(profiles, dict):
+        active_profile = redis_data.get("active_profile")
+        if not active_profile:
+            raise ValueError("redis.active_profile is required when redis.profiles is configured")
+        profile_data = profiles.get(active_profile)
+        if not isinstance(profile_data, dict):
+            raise ValueError(f"redis profile not found: {active_profile}")
+        redis_data = profile_data
     return RedisConfig(
         host=redis_data.get("host", "localhost"),
         port=redis_data.get("port", 6379),
@@ -191,6 +201,7 @@ def load_storage_config() -> StorageConfig:
     storage_data = data.get("storage", {})
     return StorageConfig(
         endpoint=storage_data.get("endpoint", "localhost:9000"),
+        public_base_url=storage_data.get("public_base_url", ""),
         access_key=storage_data.get("access_key", ""),
         secret_key=storage_data.get("secret_key", ""),
         bucket=storage_data.get("bucket", "vidmuse"),

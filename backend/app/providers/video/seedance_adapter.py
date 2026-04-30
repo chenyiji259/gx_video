@@ -14,9 +14,10 @@ API 认证：
 注意：API 路径基于火山方舟 SDK `client.content_generation.tasks` 推测，
 实际生产前需用真实 API key 验证。如有偏差请调整 _SUBMIT_PATH / _QUERY_PATH。
 
-特殊参数支持（doc 21 §3.2 首尾帧 i2v）：
-  params['last_frame_url'] - 尾帧 URL（cell N+1 图）
-  reference_image_url - 首帧 URL（cell N 图）
+特殊参数支持：
+  params['last_frame_url'] - 旧模式尾帧 URL
+  params['reference_image_urls'] - 新模式三图融合 URL 列表（起始 / 中间 / 结尾）
+  reference_image_url - 旧模式首帧 URL
 
 文档：docs/api/seedance2-video-generation-api.md
 """
@@ -127,7 +128,7 @@ class SeedanceAdapter:
                 code="missing_reference_image",
             )
 
-        if mode not in ("image_to_video", "text_to_video"):
+        if mode not in ("image_to_video", "text_to_video", "multi_image_fusion"):
             raise VideoGenerationError(
                 f"Seedance 2.0 不支持的生成模式: {mode!r}",
                 code="unsupported_mode",
@@ -144,12 +145,19 @@ class SeedanceAdapter:
             merged["ratio"] = merged.pop("aspect_ratio")
 
         last_frame_url: Optional[str] = merged.pop("last_frame_url", None)
+        reference_image_urls: list[str] = list(merged.pop("reference_image_urls", []) or [])
+        if mode == "multi_image_fusion" and len(reference_image_urls) < 3:
+            raise VideoGenerationError(
+                "multi_image_fusion 模式必须提供 3 张参考图（起始 / 中间 / 结尾）",
+                code="missing_reference_images",
+            )
 
         payload = self._build_payload(
             prompt=prompt,
             mode=mode,
             first_frame_url=reference_image_url,
             last_frame_url=last_frame_url,
+            reference_image_urls=reference_image_urls,
             merged=merged,
         )
 
@@ -157,6 +165,7 @@ class SeedanceAdapter:
             f"Seedance 2.0 提交: model={self._model_name!r} mode={mode!r} "
             f"duration={payload['duration']}s ratio={payload['ratio']!r} "
             f"first_frame={bool(reference_image_url)} last_frame={bool(last_frame_url)} "
+            f"multi_ref_count={len(reference_image_urls)} "
             f"prompt_len={len(prompt)}",
             event_type="seedance_submit",
         )
@@ -175,6 +184,7 @@ class SeedanceAdapter:
         mode: VideoGenerationMode,
         first_frame_url: Optional[str],
         last_frame_url: Optional[str],
+        reference_image_urls: list[str],
         merged: dict[str, Any],
     ) -> dict[str, Any]:
         """构建 Seedance 2.0 任务请求体（含 content 数组）。"""
@@ -183,7 +193,13 @@ class SeedanceAdapter:
             {"type": "text", "text": prompt}
         ]
 
-        if mode == "image_to_video":
+        if mode == "multi_image_fusion":
+            for image_url in reference_image_urls[:3]:
+                content.append({
+                    "type": "image_url",
+                    "image_url": {"url": image_url},
+                })
+        elif mode == "image_to_video":
             if first_frame_url:
                 content.append({
                     "type": "image_url",

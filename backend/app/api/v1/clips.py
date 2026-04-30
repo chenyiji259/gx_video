@@ -19,6 +19,7 @@ from app.repositories.asset_repository import AssetRepository
 from app.repositories.clip_repository import ClipRepository
 from app.repositories.project_repository import ProjectRepository
 from app.repositories.unit_of_work import UnitOfWork
+from app.services.asset_access_service import build_asset_access_url
 
 router = APIRouter()
 
@@ -50,6 +51,7 @@ async def list_active_clips(
         clip_list = []
         for clip in clips:
             asset = await asset_repo.get_by_id(clip.asset_id)
+            asset_url = await build_asset_access_url(asset)
             clip_list.append({
                 "id": clip.id,
                 "shot_id": clip.shot_id,
@@ -57,7 +59,7 @@ async def list_active_clips(
                 "provider": clip.provider,
                 "generation_mode": clip.generation_mode,
                 "asset_id": clip.asset_id,
-                "storage_uri": asset.storage_uri if asset else None,
+                "storage_uri": asset_url,
                 "duration_ms": clip.duration_ms,
                 "status": clip.status,
                 "is_active": clip.is_active,
@@ -101,6 +103,7 @@ async def get_clip(
             )
 
         asset = await AssetRepository(uow.session).get_by_id(clip.asset_id)
+        asset_url = await build_asset_access_url(asset)
 
     return ok(
         data={
@@ -110,7 +113,7 @@ async def get_clip(
             "provider": clip.provider,
             "generation_mode": clip.generation_mode,
             "asset_id": clip.asset_id,
-            "storage_uri": asset.storage_uri if asset else None,
+            "storage_uri": asset_url,
             "duration_ms": clip.duration_ms,
             "status": clip.status,
             "is_active": clip.is_active,

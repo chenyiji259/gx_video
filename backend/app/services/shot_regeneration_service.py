@@ -40,6 +40,7 @@ from app.repositories.timeline_repository import (
 from app.repositories.unit_of_work import UnitOfWork
 from app.services.cost_estimation_service import CostEstimationService
 from app.services.concurrency_guard_service import ConcurrencyError, concurrency_guard
+from app.services.asset_access_service import build_asset_access_url
 from app.services.prompt_compiler_service import PromptCompilerError, PromptCompilerService
 from app.storage.local_artifact_store import LocalArtifactStore
 from app.storage.path_planner import ArtifactStage
@@ -152,10 +153,10 @@ class ShotRegenerationService:
             idem_locked = True
 
         # ---- 步骤 1: 读取并校验上下文 ----------------------------------------
-        shot, reference_image_url = await self._load_and_validate(
+        shot, reference_image_urls = await self._load_and_validate(
             project_id, shot_id, user_id
         )
-        mode = "image_to_video" if reference_image_url else "text_to_video"
+        mode = "multi_image_fusion" if len(reference_image_urls) >= 3 else ("image_to_video" if reference_image_urls else "text_to_video")
         logger.info(
             f"单镜头重生成开始: shot_id={shot_id!r} mode={mode!r} "
             f"（已移除 credits 校验）",
@@ -172,7 +173,7 @@ class ShotRegenerationService:
                     shot=shot,
                     user_id=user_id,
                     mode=mode,
-                    reference_image_url=reference_image_url,
+                    reference_image_urls=reference_image_urls,
                     idem_locked=idem_locked,
                     idempotency_key=idempotency_key,
                     logger=logger,
@@ -190,7 +191,7 @@ class ShotRegenerationService:
         shot: Any,
         user_id: str,
         mode: str,
-        reference_image_url: str | None,
+        reference_image_urls: list[str],
         idem_locked: bool,
         idempotency_key: str | None,
         logger: Any,
@@ -206,6 +207,7 @@ class ShotRegenerationService:
                     project_id=project_id,
                     target_type="shot_clip",
                     generation_mode=mode,
+                    video_reference_image_urls=reference_image_urls,
                 )
         except PromptCompilerError as exc:
             if idem_locked:
@@ -221,7 +223,8 @@ class ShotRegenerationService:
                 project_id=project_id,
                 mode=mode,
                 shot_index=shot.shot_index,
-                reference_image_url=reference_image_url,
+                reference_image_url=reference_image_urls[0] if reference_image_urls else None,
+                reference_image_urls=reference_image_urls,
             )
         except VideoGenerationError:
             if idem_locked:
@@ -304,11 +307,11 @@ class ShotRegenerationService:
         project_id: str,
         shot_id: str,
         user_id: str,
-    ) -> tuple[Any, Optional[str]]:
-        """校验项目/shot 归属，加载 storyboard frame URL。
+    ) -> tuple[Any, list[str]]:
+        """校验项目/shot 归属，加载 storyboard frame URL 列表。
 
         Returns:
-            (shot ORM 对象, reference_image_url 或 None)
+            (shot ORM 对象, reference_image_urls)
         """
         async with UnitOfWork() as uow:
             session = uow.session
@@ -333,18 +336,19 @@ class ShotRegenerationService:
                 )
 
             # 查找 active storyboard frame（作为 image_to_video 参考帧）
-            reference_image_url: Optional[str] = None
+            reference_image_urls: list[str] = []
             sb_version = await StoryboardVersionRepository(session).get_active(project_id)
             if sb_version:
-                frame = await StoryboardFrameRepository(session).get_by_shot(
+                frames = await StoryboardFrameRepository(session).list_by_shot(
                     sb_version.id, shot_id
                 )
-                if frame:
+                for frame in frames:
                     asset = await AssetRepository(session).get_by_id(frame.asset_id)
-                    if asset and asset.storage_uri:
-                        reference_image_url = asset.storage_uri
+                    asset_url = await build_asset_access_url(asset)
+                    if asset_url:
+                        reference_image_urls.append(asset_url)
 
-        return shot, reference_image_url
+        return shot, reference_image_urls
 
     # ------------------------------------------------------------------
     # 辅助：落库 ClipVersion

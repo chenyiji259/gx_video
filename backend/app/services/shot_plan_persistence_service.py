@@ -1099,7 +1099,7 @@ class ShotPlanPersistenceService:
             )
             shot_list_data.append({
                 "shot_index": int(ns.get("shot_index", idx)),
-                "scene_id": f"scene_{(idx // 8) + 1:03d}",
+                "scene_id": f"scene_{(idx // 3) + 1:03d}",
                 "scene_type": "verse",
                 "shot_role": "narrative",
                 "subject": ns.get("action_description") or ns.get("end_frame_description") or "",
@@ -1120,15 +1120,15 @@ class ShotPlanPersistenceService:
             float((spec.output_config or {}).get("target_duration_sec", 0) or 0) if spec is not None else 0.0,
         )
 
-        # ---- 步骤 3: 构造 scene_plan_data（每张九宫格视为一个 scene）-------------
+        # ---- 步骤 3: 构造 scene_plan_data（当前版本：每张九宫格 3 个 shot）-------------
         scene_plan_data: list[dict] = []
-        grid_count = max(1, (len(shot_list_data) + 7) // 8)
+        grid_count = max(1, (len(shot_list_data) + 2) // 3)
         for g in range(grid_count):
             scene_plan_data.append({
                 "scene_id": f"scene_{g + 1:03d}",
                 "scene_name": f"九宫格 #{g + 1}",
                 "shot_indices": list(
-                    range(g * 8, min((g + 1) * 8, len(shot_list_data)))
+                    range(g * 3, min((g + 1) * 3, len(shot_list_data)))
                 ),
             })
 

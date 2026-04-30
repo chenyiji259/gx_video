@@ -16,6 +16,7 @@ from app.repositories.asset_repository import AssetRepository
 from app.repositories.audio_analysis_repository import AudioAnalysisRepository
 from app.repositories.project_repository import ProjectRepository
 from app.repositories.unit_of_work import UnitOfWork
+from app.services.asset_access_service import build_asset_access_url
 
 router = APIRouter()
 
@@ -53,7 +54,7 @@ async def get_active_audio_analysis(
                     aa.audio_asset_id
                 )
                 if audio_asset:
-                    audio_url = audio_asset.storage_uri
+                    audio_url = await build_asset_access_url(audio_asset)
 
     if aa is None:
         raise HTTPException(

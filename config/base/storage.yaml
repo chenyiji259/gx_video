@@ -1,17 +1,19 @@
-# MinIO / S3 Compatible Storage Configuration
+# OSS Object Storage Configuration
 
 storage:
-  # 服务器连接信息
-  endpoint: 8.134.170.191:90
-  access_key: "${MINIO_ACCESS_KEY}"
-  secret_key: "${MINIO_SECRET_KEY}"
-  bucket: muse
+  # OSS SDK endpoint，例如 https://oss-cn-beijing.aliyuncs.com
+  endpoint: "${STORAGE_ENDPOINT}"
+  # 资产追溯 URL 基础前缀，例如 https://bucket.oss-cn-beijing.aliyuncs.com
+  public_base_url: "${STORAGE_PUBLIC_BASE_URL}"
+  access_key: "${STORAGE_ACCESS_KEY}"
+  secret_key: "${STORAGE_SECRET_KEY}"
+  bucket: "${STORAGE_BUCKET}"
 
   # 是否使用 HTTPS
-  secure: false
+  secure: "${STORAGE_SECURE}"
 
   # 区域设置
-  region: us-east-1
+  region: "${STORAGE_REGION}"
 
   # 文件大小限制 (bytes)
   max_upload_size: 104857600  # 100MB

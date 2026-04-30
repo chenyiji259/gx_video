@@ -43,7 +43,7 @@ from app.repositories.visual_bible_repository import (
     NarrativeScriptVersionRepository,
 )
 from app.services.state_transition_service import state_transition_service
-from app.storage.minio_adapter import get_storage
+from app.storage.storage_factory import get_storage
 from app.core.config import get_config
 from app.core.provider_registry import get_provider_registry
 from app.tools.shared.artifact_tools import build_ref_from_asset_latest, write_artifact

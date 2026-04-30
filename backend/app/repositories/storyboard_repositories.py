@@ -137,6 +137,21 @@ class StoryboardFrameRepository(BaseRepository[StoryboardFrame]):
         result = await self._session.execute(stmt)
         return result.scalar_one_or_none()
 
+    async def list_by_shot(
+        self, storyboard_version_id: str, shot_id: str
+    ) -> list[StoryboardFrame]:
+        """列出指定 shot 绑定的所有切分帧，按 frame_index 排序。"""
+        stmt = (
+            select(StoryboardFrame)
+            .where(
+                StoryboardFrame.storyboard_version_id == storyboard_version_id,
+                StoryboardFrame.shot_id == shot_id,
+            )
+            .order_by(StoryboardFrame.frame_index)
+        )
+        result = await self._session.execute(stmt)
+        return list(result.scalars().all())
+
     async def bulk_add(self, frames: list[StoryboardFrame]) -> None:
         """批量添加帧记录（一次性 flush 效率更高）。"""
         for frame in frames:

@@ -1,7 +1,7 @@
 ---
 name: generate_nine_grid
 version: "1.0"
-description: 九宫格生图 prompt 编译模板（doc 21 §3 + §6 + §3.2 跨九宫格衔接）
+description: 九宫格生图 prompt 编译模板（当前版本：单张九宫格 / 3 shot / 每行 3 图）
 layer: tasks
 variables:
   - grid_index
@@ -63,19 +63,23 @@ variables:
 
 该 JSON 中第 N 项对应 **cell N**（1-9），描述了该 cell 应展示的画面。
 
+当前版本的行级规则：
+- cell1 / cell2 / cell3 = shot1 的起始 / 中间 / 结尾
+- cell4 / cell5 / cell6 = shot2 的起始 / 中间 / 结尾
+- cell7 / cell8 / cell9 = shot3 的起始 / 中间 / 结尾
+
+同一行内的 3 个 cell 必须表现为**同一个镜头内部的连续过程**，而不是 3 个独立镜头。
+
 ---
 
 {% if prev_cell9_description %}
-## ⚠️ 跨九宫格衔接规则（doc 21 §3.2）
+## 跨九宫格说明（预留）
 
-本张是第 {{ grid_index }} 张九宫格（不是第 1 张），**第 1 格（cell 1）必须与上一张九宫格的第 9 格视觉等同**：
+当前版本前端和后端默认只使用单张九宫格。
+如果后续进入多张九宫格扩展，再把上一张的衔接信息纳入设计。
 
-> 上一张 cell 9 的画面：
-> {{ prev_cell9_description }}
-
-**重要**：cell 1 不是独立创作的画面，而是上一张 cell 9 的延续。在 prompt 中明确指出这一点（如"cell 1 shows the same scene as the previous grid's last frame"）。
-
-实际生成时，后端会**物理复用**上一张的 cell 9 图作为本张的 cell 1（不让模型重生），所以你的 prompt 主要描述 cell 2-9 的画面即可。
+上一张的结尾画面参考：
+{{ prev_cell9_description }}
 
 {% endif %}
 
@@ -124,9 +128,10 @@ variables:
 2. **每个 cell 用位置标识**：`top-left cell shows ...`, `top-center cell shows ...`, ..., `bottom-right cell shows ...`
 3. **风格描述放在所有 cell 之前**：作为全局视觉锚点
 4. **角色描述精确复用**：每次出现同一角色，必须重复其完整 appearance 描述（外貌 / 服装 / 气质）
-5. **画面间逻辑过渡**：cell N 的画面应该是 cell N+1 的"前一刻"——cell 之间动作连贯
-6. **避免模糊词**：禁止 "cinematic", "beautiful", "amazing" 这类无信息词，用具体的视觉描述替代
-7. **严禁白边/白框/白分隔设计**：九宫格必须 edge-to-edge 满版铺开，优先使用深色或低对比细线分隔
+5. **同一行内逻辑过渡最重要**：每一行的 3 张图必须表现为起始 → 中间 → 结尾的连续动作
+6. **行与行之间也要合理衔接**：shot1 结束后进入 shot2，shot2 结束后进入 shot3，但优先保证每行内部连续性
+7. **避免模糊词**：禁止 "cinematic", "beautiful", "amazing" 这类无信息词，用具体的视觉描述替代
+8. **严禁白边/白框/白分隔设计**：九宫格必须 edge-to-edge 满版铺开，优先使用深色或低对比细线分隔
 
 ---
 

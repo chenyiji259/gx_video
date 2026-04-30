@@ -21,6 +21,7 @@ from app.repositories.asset_repository import AssetRepository
 from app.repositories.export_repository import ExportRepository
 from app.repositories.project_repository import ProjectRepository
 from app.repositories.unit_of_work import UnitOfWork
+from app.services.asset_access_service import build_asset_access_url
 from app.services.export_service import ExportError, ExportService
 from app.tools.ffmpeg_timeline_tool import FFmpegNotAvailableError
 
@@ -69,13 +70,14 @@ async def trigger_export(
 
     async with UnitOfWork() as uow:
         asset = await AssetRepository(uow.session).get_by_id(export_version.asset_id)
+        asset_url = await build_asset_access_url(asset)
 
     return ok(
         data={
             "export_version_id": export_version.id,
             "resolution": export_version.resolution,
             "status": export_version.status,
-            "storage_uri": asset.storage_uri if asset else None,
+            "storage_uri": asset_url,
             "created_at": export_version.created_at.isoformat() if export_version.created_at else None,
             "message": f"导出完成（{resolution}），项目已推进到 export_ready 阶段。",
         },
@@ -112,13 +114,14 @@ async def get_latest_export(
             )
 
         asset = await AssetRepository(uow.session).get_by_id(export_version.asset_id)
+        asset_url = await build_asset_access_url(asset)
 
     return ok(
         data={
             "export_version_id": export_version.id,
             "timeline_version_id": export_version.timeline_version_id,
             "asset_id": export_version.asset_id,
-            "storage_uri": asset.storage_uri if asset else None,
+            "storage_uri": asset_url,
             "resolution": export_version.resolution,
             "status": export_version.status,
             "created_at": export_version.created_at.isoformat() if export_version.created_at else None,

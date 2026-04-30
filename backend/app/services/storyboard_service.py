@@ -40,6 +40,7 @@ from app.repositories.unit_of_work import UnitOfWork
 from app.repositories.visual_bible_repository import NarrativeScriptVersionRepository
 from app.schemas.event import ProjectEvent
 from app.schemas.project import CreativeBriefExtension
+from app.services.asset_access_service import build_asset_access_url, build_asset_access_url_map
 from app.services.concurrency_guard_service import ConcurrencyError, concurrency_guard
 from app.services.event_log_service import event_log_service
 from app.services.prompt_compiler_service import PromptCompilerService
@@ -253,7 +254,7 @@ class StoryboardService:
             # 更新跨 grid 衔接信息（doc 21 §3.2）
             last_grid = all_grids_meta[-1]
             prev_cell9_asset_id = last_grid["cells"][-1]["asset_id"]
-            cell9_shot_index = (grid_index - 1) * 8 + 8
+            cell9_shot_index = (grid_index - 1) * 3 + 2
             if cell9_shot_index < len(narrative_shots):
                 next_shot = narrative_shots[cell9_shot_index]
                 prev_cell9_description = next_shot.get(
@@ -296,7 +297,7 @@ class StoryboardService:
                     category="domain",
                     payload={
                         "grid_count": grid_count,
-                        "total_frames": 9 + 8 * (grid_count - 1),
+                        "total_frames": 9 * grid_count,
                         "shot_count": total_shots,
                         "storyboard_version_id": sb_version_id,
                     },
@@ -354,17 +355,27 @@ class StoryboardService:
         """处理单张九宫格：编译 prompt → 生成大图 → 切分 → 落 StoryboardFrame。"""
 
         # 1. 准备 9 个 cell 对应的 shot 描述
-        # cell N 对应 shot_index = (grid_index-1)*8 + (N-1)（doc 21 §5.4）
+        # 当前版本：每一行对应 1 个 shot（起始 / 中间 / 结尾）
         shot_descriptions: list[dict] = []
         for cell_position in range(1, 10):
-            shot_idx = (grid_index - 1) * 8 + (cell_position - 1)
+            row_offset = (cell_position - 1) // 3
+            shot_idx = (grid_index - 1) * 3 + row_offset
+            phase = ["start", "middle", "end"][(cell_position - 1) % 3]
             if shot_idx < len(narrative_shots):
                 ns = narrative_shots[shot_idx]
+                frame_description = (
+                    ns.get("start_frame_description", "")
+                    if phase == "start"
+                    else ns.get("middle_frame_description", "")
+                    if phase == "middle"
+                    else ns.get("end_frame_description", "")
+                )
                 shot_descriptions.append({
                     "cell_position": cell_position,
                     "shot_index": shot_idx,
                     "scene_description": ns.get("scene_description", ""),
-                    "frame_description": ns.get("start_frame_description", ""),
+                    "frame_description": frame_description,
+                    "phase": phase,
                     "characters_in_shot": ns.get("characters_in_shot", []),
                     "emotion": ns.get("emotion", "neutral"),
                 })
@@ -376,6 +387,7 @@ class StoryboardService:
                     "shot_index": None,
                     "scene_description": "（边界，沿用最后画面）",
                     "frame_description": last_ns.get("end_frame_description", ""),
+                    "phase": phase,
                     "characters_in_shot": [],
                     "emotion": "neutral",
                 })
@@ -448,7 +460,7 @@ class StoryboardService:
         # 4. emit storyboard.grid.generated
         async with UnitOfWork() as uow:
             parent_asset = await AssetRepository(uow.session).get_by_id(parent_asset_id)
-            parent_url = parent_asset.storage_uri if parent_asset else ""
+            parent_url = await build_asset_access_url(parent_asset) or ""
             await event_log_service.emit(
                 uow.session,
                 ProjectEvent(
@@ -488,9 +500,10 @@ class StoryboardService:
         cells_meta: list[dict] = []
         async with UnitOfWork() as uow:
             asset_repo = AssetRepository(uow.session)
+            cell_assets = await asset_repo.list_by_ids(cell_asset_ids)
+            cell_url_map = await build_asset_access_url_map(cell_assets)
             for cell_pos, cell_aid in enumerate(cell_asset_ids, start=1):
-                ca = await asset_repo.get_by_id(cell_aid)
-                shot_idx = (grid_index - 1) * 8 + (cell_pos - 1)
+                shot_idx = (grid_index - 1) * 3 + ((cell_pos - 1) // 3)
                 shot_id_for_cell = shot_id_by_index.get(shot_idx)
                 narrative_meta = (
                     shot_descriptions[cell_pos - 1]
@@ -500,7 +513,7 @@ class StoryboardService:
                 cells_meta.append({
                     "cell_position": cell_pos,
                     "asset_id": cell_aid,
-                    "asset_url": ca.storage_uri if ca else "",
+                    "asset_url": cell_url_map.get(cell_aid, ""),
                     "shot_id": shot_id_for_cell,
                     "shot_index": shot_idx if shot_idx < len(narrative_shots) else None,
                     "frame_description": narrative_meta.get("frame_description", ""),
@@ -553,7 +566,7 @@ class StoryboardService:
 
             # 9 条 cell frame
             for cell_pos, cell_aid in enumerate(cell_asset_ids, start=1):
-                shot_idx = (grid_index - 1) * 8 + (cell_pos - 1)
+                shot_idx = (grid_index - 1) * 3 + ((cell_pos - 1) // 3)
                 shot_id_for_cell = shot_id_by_index.get(shot_idx)
                 if shot_id_for_cell:
                     ready_shot_ids.add(shot_id_for_cell)

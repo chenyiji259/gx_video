@@ -30,7 +30,7 @@ from app.providers.lipsync.base import LipSyncError, get_lipsync_provider
 from app.repositories.asset_repository import AssetRepository
 from app.repositories.unit_of_work import UnitOfWork
 from app.storage.local_artifact_store import LocalArtifactStore
-from app.storage.minio_adapter import get_storage
+from app.storage.storage_factory import get_storage
 from app.utils.ids import generate_ulid
 
 

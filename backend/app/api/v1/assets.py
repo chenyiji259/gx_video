@@ -1,13 +1,13 @@
 """资产上传 API（doc 05 §17.5）。
 
 接口：
-  POST /projects/{project_id}/assets/upload-init  - 获取 MinIO PUT 预签名 URL
+  POST /projects/{project_id}/assets/upload-init  - 获取对象存储 PUT 预签名 URL
   POST /projects/{project_id}/assets/complete     - 确认上传完成，落库 Asset
   GET  /projects/{project_id}/assets              - 列出项目资产
 
 上传流程说明（两步式）：
   1. 客户端 POST upload-init 拿到 upload_url + asset_id + object_key
-  2. 客户端直接 PUT 文件到 upload_url（绕过后端，直传 MinIO）
+  2. 客户端直接 PUT 文件到 upload_url（绕过后端，直传对象存储）
   3. 客户端 POST complete 告知后端上传完成
   4. 后端核验对象存在 → 落库 → 本地追溯副本 → 返回 asset（含永久 storage_uri）
 """
@@ -73,7 +73,7 @@ async def upload_init(
     request: Request,
     current_user: User = Depends(get_current_user),
 ) -> JSONResponse:
-    """步骤一：申请上传槽位，返回 MinIO PUT 预签名 URL。
+    """步骤一：申请上传槽位，返回对象存储 PUT 预签名 URL。
 
     客户端拿到 upload_url 后，直接 PUT 文件到该 URL（无需通过后端中转）。
     upload_url 有效期 30 分钟。
@@ -110,10 +110,10 @@ async def complete_upload(
     request: Request,
     current_user: User = Depends(get_current_user),
 ) -> JSONResponse:
-    """步骤二：确认上传完成，落库 Asset 记录，返回含永久 storage_uri 的资产信息。
+    """步骤二：确认上传完成，落库 Asset 记录，返回含访问 URL 的资产信息。
 
     后端会：
-      1. 核验 MinIO 中对象真实存在
+      1. 核验对象存储中对象真实存在
       2. 落库 Asset 记录（storage_uri 为永久直链）
       3. 同步本地追溯副本（01_input/）
     """

@@ -23,6 +23,7 @@ from app.repositories.timeline_repository import (
     TimelineVersionRepository,
 )
 from app.repositories.unit_of_work import UnitOfWork
+from app.services.asset_access_service import build_asset_access_url
 from app.tasks.dispatcher import task_dispatcher
 
 router = APIRouter()
@@ -63,7 +64,7 @@ async def get_active_timeline(
         if preview_asset_id:
             asset = await AssetRepository(uow.session).get_by_id(preview_asset_id)
             if asset:
-                preview_uri = asset.storage_uri
+                preview_uri = await build_asset_access_url(asset)
 
     return ok(
         data={

@@ -4,7 +4,7 @@
 
 职责：
   接收 PromptBundle，调用对应 VideoProviderAdapter 生成视频，
-  将结果存入 MinIO + 落 Asset 记录 + 写本地副本，返回 asset_id。
+  将结果存入对象存储 + 落 Asset 记录 + 写本地副本，返回 asset_id。
 
 上下游：
   输入：PromptBundle（来自 PromptCompilerService）
@@ -26,7 +26,7 @@ from app.repositories.asset_repository import AssetRepository
 from app.repositories.unit_of_work import UnitOfWork
 from app.schemas.prompt import PromptBundle
 from app.storage.local_artifact_store import LocalArtifactStore
-from app.storage.minio_adapter import get_storage
+from app.storage.storage_factory import get_storage
 from app.utils.ids import generate_ulid
 
 
@@ -35,7 +35,7 @@ class VideoGenerationTool:
 
     内部使用 VideoProviderAdapter 生成视频，完成后：
       1. 下载视频字节
-      2. 上传到 MinIO（projects/{project_id}/assets/shot_clip/...）
+      2. 上传到对象存储（projects/{project_id}/assets/shot_clip/...）
       3. 落库 Asset 记录
       4. 写本地副本（08_clips/）
       5. 返回 asset_id
@@ -49,6 +49,7 @@ class VideoGenerationTool:
         mode: VideoGenerationMode = "image_to_video",
         shot_index: Optional[int] = None,
         reference_image_url: Optional[str] = None,
+        reference_image_urls: Optional[list[str]] = None,
         last_frame_url: Optional[str] = None,
     ) -> tuple[str, Optional[int]]:
         """为 PromptBundle 生成视频并落库。
@@ -59,6 +60,7 @@ class VideoGenerationTool:
             mode:                 生成模式，默认 image_to_video。
             shot_index:           镜头序号（用于日志输出，可选）。
             reference_image_url:  image_to_video 的起始帧 URL（storyboard frame）。
+            reference_image_urls: 多图融合模式下的有序参考图 URL 列表。
             last_frame_url:       image_to_video 的尾帧 URL（相邻 storyboard frame）。
 
         Returns:
@@ -81,6 +83,8 @@ class VideoGenerationTool:
         )
 
         params = dict(bundle.params or {})
+        if reference_image_urls:
+            params["reference_image_urls"] = list(reference_image_urls)
         if last_frame_url:
             params["last_frame_url"] = last_frame_url
         requested_duration_sec = params.get("duration_sec")

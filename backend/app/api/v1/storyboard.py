@@ -22,6 +22,7 @@ from app.repositories.storyboard_repositories import (
 )
 from app.repositories.unit_of_work import UnitOfWork
 from app.repositories.prompt_bundle_repository import PromptBundleRepository
+from app.services.asset_access_service import build_asset_access_url, build_asset_access_url_map
 
 router = APIRouter()
 
@@ -100,10 +101,10 @@ async def list_storyboard_frames(
         )
         total = await frame_repo.count_by_version(version.id)
 
-        # 批量加载 Asset，提取 storage_uri（就是图片本地/CDN 可访问的永久 URL）
+        # 批量加载 Asset，统一转为当前可访问 URL（私有 OSS 下为签名 URL）
         asset_ids = [f.asset_id for f in frames]
         assets = await asset_repo.list_by_ids(asset_ids)
-        asset_map: dict[str, str] = {a.id: a.storage_uri for a in assets}
+        asset_map = await build_asset_access_url_map(assets)
 
     frame_list = []
     for frame in frames:
@@ -111,7 +112,6 @@ async def list_storyboard_frames(
             "id": frame.id,
             "shot_id": frame.shot_id,
             "asset_id": frame.asset_id,
-            # storage_uri 是 MinIO 永久直链（bucket 公开读），前端直接加载图片用此 URL
             "storage_uri": asset_map.get(frame.asset_id),
             "prompt_bundle_id": frame.prompt_bundle_id,
             "frame_index": frame.frame_index,
@@ -196,6 +196,18 @@ async def get_storyboard_grids(
         grid_count = raw.get("grid_count") or 0
         total_shots = raw.get("total_shots") or 0
 
+        asset_ids: set[str] = set()
+        for grid in grids_meta:
+            parent_asset_id = grid.get("parent_asset_id")
+            if parent_asset_id:
+                asset_ids.add(parent_asset_id)
+            for cell in grid.get("cells") or []:
+                cell_asset_id = cell.get("asset_id")
+                if cell_asset_id:
+                    asset_ids.add(cell_asset_id)
+        assets = await AssetRepository(session).list_by_ids(list(asset_ids)) if asset_ids else []
+        asset_url_map = await build_asset_access_url_map(assets)
+
         enriched_grids: list[dict] = []
         for grid in grids_meta:
             bundle_id = grid.get("bundle_id")
@@ -207,8 +219,19 @@ async def get_storyboard_grids(
                 if grid.get("grid_index")
                 else None
             )
+            cells = []
+            for cell in grid.get("cells") or []:
+                cells.append({
+                    **cell,
+                    "asset_url": asset_url_map.get(cell.get("asset_id"), cell.get("asset_url")),
+                })
             enriched_grids.append({
                 **grid,
+                "parent_asset_url": asset_url_map.get(
+                    grid.get("parent_asset_id"),
+                    grid.get("parent_asset_url"),
+                ),
+                "cells": cells,
                 "prompt_bundle": (
                     {
                         "bundle_id": prompt_bundle.id,

@@ -235,7 +235,7 @@ class ProjectService:
         """从系统中永久删除项目及所有关联产物。
 
         清理顺序：
-          1. MinIO：删除 projects/{project_id}/ 前缀下的所有对象
+          1. 对象存储：删除 projects/{project_id}/ 前缀下的所有对象
           2. 本地磁盘：递归删除 data/projects/{project_id}/ 目录
           3. 数据库：删除 projects 行（ON DELETE CASCADE 自动清理所有关联表）
 
@@ -250,20 +250,20 @@ class ProjectService:
             if project is None:
                 raise ProjectError("项目不存在", code="not_found")
 
-        # --- Step 1: 清理 MinIO（删除整个项目前缀）---
+        # --- Step 1: 清理对象存储（删除整个项目前缀）---
         try:
-            from app.storage.minio_adapter import get_storage  # noqa: PLC0415
+            from app.storage.storage_factory import get_storage  # noqa: PLC0415
             storage = get_storage()
             prefix = f"projects/{project_id}/"
             deleted_count = await storage.async_delete_prefix(prefix)
             logger.info(
-                f"MinIO 清理完成: 已删除 {deleted_count} 个对象（前缀 {prefix!r}）",
-                event_type="project_minio_cleaned",
+                f"对象存储清理完成: 已删除 {deleted_count} 个对象（前缀 {prefix!r}）",
+                event_type="project_storage_cleaned",
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning(
-                f"MinIO 清理失败（不阻断删除流程）: {exc!r}",
-                event_type="project_minio_clean_failed",
+                f"对象存储清理失败（不阻断删除流程）: {exc!r}",
+                event_type="project_storage_clean_failed",
             )
 
         # --- Step 2: 清理本地磁盘 ---

@@ -44,6 +44,7 @@ from app.repositories.storyboard_repositories import (
     StoryboardVersionRepository,
 )
 from app.repositories.unit_of_work import UnitOfWork
+from app.services.asset_access_service import build_asset_access_url, build_asset_access_url_map
 from app.services.concurrency_guard_service import ConcurrencyError, concurrency_guard
 from app.services.prompt_compiler_service import PromptCompilerError, PromptCompilerService
 from app.schemas.event import ProjectEvent
@@ -164,44 +165,54 @@ class ClipService:
             # 物理复用上一张 cell9，因此边界帧天然连续。
             sb_version = await StoryboardVersionRepository(session).get_active(project_id)
             asset_repo = AssetRepository(session)
-            frame_map: dict[str, str] = {}
-            next_frame_map: dict[str, str | None] = {}
-            next_shot_desc_map: dict[str, str | None] = {}
+            shot_frame_urls_map: dict[str, list[str]] = {}
+            shot_frame_desc_map: dict[str, dict[str, str | None]] = {}
             sorted_shots = sorted(shots_to_process, key=lambda s: s.shot_index)
             if sb_version and sb_version.raw_payload:
                 cell_asset_ids: set[str] = set()
-                boundary_by_shot_index: dict[int, tuple[str | None, str | None]] = {}
+                frames_by_shot_index: dict[int, list[str | None]] = {}
+                desc_by_shot_index: dict[int, dict[str, str | None]] = {}
                 for grid in (sb_version.raw_payload.get("grids") or []):
                     grid_index = int(grid.get("grid_index") or 1)
-                    base_shot_index = (grid_index - 1) * 8
-                    cells = {
-                        int(cell.get("cell_position") or 0): cell.get("asset_id")
-                        for cell in (grid.get("cells") or [])
-                    }
-                    for offset in range(8):
-                        first_asset_id = cells.get(offset + 1)
-                        last_asset_id = cells.get(offset + 2)
-                        shot_index = base_shot_index + offset
-                        boundary_by_shot_index[shot_index] = (first_asset_id, last_asset_id)
-                        if first_asset_id:
-                            cell_asset_ids.add(first_asset_id)
-                        if last_asset_id:
-                            cell_asset_ids.add(last_asset_id)
+                    base_shot_index = (grid_index - 1) * 3
+                    cells = sorted(
+                        (grid.get("cells") or []),
+                        key=lambda cell: int(cell.get("cell_position") or 0),
+                    )
+                    for row in range(3):
+                        shot_index = base_shot_index + row
+                        row_cells = cells[row * 3:(row + 1) * 3]
+                        frames_by_shot_index[shot_index] = [
+                            cell.get("asset_id") for cell in row_cells
+                        ]
+                        desc_by_shot_index[shot_index] = {
+                            "start": row_cells[0].get("frame_description") if len(row_cells) > 0 else None,
+                            "middle": row_cells[1].get("frame_description") if len(row_cells) > 1 else None,
+                            "end": row_cells[2].get("frame_description") if len(row_cells) > 2 else None,
+                        }
+                        for cell in row_cells:
+                            cell_asset_id = cell.get("asset_id")
+                            if cell_asset_id:
+                                cell_asset_ids.add(cell_asset_id)
 
                 assets = await asset_repo.list_by_ids(list(cell_asset_ids))
-                asset_url_map = {a.id: a.storage_uri for a in assets if a.storage_uri}
+                asset_url_map = await build_asset_access_url_map(assets)
 
                 for shot in sorted_shots:
-                    first_asset_id, last_asset_id = boundary_by_shot_index.get(
-                        shot.shot_index, (None, None)
+                    ordered_asset_ids = frames_by_shot_index.get(shot.shot_index, [])
+                    shot_frame_urls_map[shot.id] = [
+                        asset_url_map.get(asset_id or "", "")
+                        for asset_id in ordered_asset_ids
+                        if asset_id
+                    ]
+                    shot_frame_desc_map[shot.id] = desc_by_shot_index.get(
+                        shot.shot_index,
+                        {"start": None, "middle": None, "end": None},
                     )
-                    frame_map[shot.id] = asset_url_map.get(first_asset_id or "", "")
-                    next_frame_map[shot.id] = asset_url_map.get(last_asset_id or "") or None
-                    next_shot_desc_map[shot.id] = shot.subject or shot.location or shot.lyric_text
 
         logger.info(
             f"Clip 上下文加载完成: shots={len(shots_to_process)} "
-            f"有起始帧的shots={len(frame_map)}",
+            f"有参考帧的shots={len(shot_frame_urls_map)}",
             event_type="clip_context_loaded",
         )
 
@@ -251,9 +262,8 @@ class ClipService:
                 clip = await self._process_single_shot(
                     shot=shot,
                     project_id=project_id,
-                    reference_image_url=frame_map.get(shot.id),
-                    last_frame_url=next_frame_map.get(shot.id),
-                    last_frame_description=next_shot_desc_map.get(shot.id),
+                    reference_image_urls=shot_frame_urls_map.get(shot.id, []),
+                    frame_descriptions=shot_frame_desc_map.get(shot.id, {}),
                     logger=logger,
                 )
                 elapsed = round(time.monotonic() - t0, 2)
@@ -361,9 +371,8 @@ class ClipService:
         *,
         shot: Any,
         project_id: str,
-        reference_image_url: str | None,
-        last_frame_url: str | None,
-        last_frame_description: str | None,
+        reference_image_urls: list[str],
+        frame_descriptions: dict[str, str | None],
         logger: Any,
     ) -> ClipVersion | None:
         """处理单个 shot：编译 video prompt → 生成 clip → 写 clip_versions。"""
@@ -372,10 +381,10 @@ class ClipService:
 
         try:
             # 决定生成模式
-            mode = "image_to_video" if reference_image_url else "text_to_video"
+            mode = "multi_image_fusion" if len(reference_image_urls) >= 3 else ("image_to_video" if reference_image_urls else "text_to_video")
             logger.debug(
                 f"shot[{shot_index}] 生成模式: mode={mode!r} "
-                f"has_reference={'是' if reference_image_url else '否'}",
+                f"reference_count={len(reference_image_urls)}",
                 event_type="clip_mode_resolved",
             )
 
@@ -385,9 +394,11 @@ class ClipService:
                     shot_id=shot_id,
                     project_id=project_id,
                     target_type="shot_clip",
-                    generation_mode=mode,  # 传入实际模式，供 compile_video_prompt 模板使用
-                    first_frame_description=shot.subject or shot.location or shot.lyric_text,
-                    last_frame_description=last_frame_description,
+                    generation_mode=mode,
+                    start_frame_description=frame_descriptions.get("start") or shot.subject or shot.location or shot.lyric_text,
+                    middle_frame_description=frame_descriptions.get("middle"),
+                    end_frame_description=frame_descriptions.get("end"),
+                    video_reference_image_urls=reference_image_urls,
                 )
                 logger.debug(
                     f"shot[{shot_index}] video prompt 编译完成: bundle_id={bundle.bundle_id!r} "
@@ -401,8 +412,8 @@ class ClipService:
                 project_id=project_id,
                 mode=mode,
                 shot_index=shot_index,
-                reference_image_url=reference_image_url,
-                last_frame_url=last_frame_url,
+                reference_image_url=reference_image_urls[0] if reference_image_urls else None,
+                reference_image_urls=reference_image_urls,
             )
             # 使用 provider 实际返回的视频时长； provider 未返回时回落到计划值
             duration_ms = actual_duration_ms if actual_duration_ms else (shot.duration_ms or 5000)
@@ -460,7 +471,7 @@ class ClipService:
                                 "start_ms": shot.start_ms,
                                 "end_ms": shot.end_ms,
                                 "duration_ms": duration_ms,
-                                "storage_uri": ev_asset.storage_uri if ev_asset else None,
+                                "storage_uri": await build_asset_access_url(ev_asset),
                                 "clip_version_id": clip.id,
                             },
                         ),

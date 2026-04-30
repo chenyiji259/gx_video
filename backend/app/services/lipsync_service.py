@@ -45,6 +45,7 @@ from app.repositories.timeline_repository import (
 from app.repositories.unit_of_work import UnitOfWork
 from app.schemas.event import ProjectEvent
 from app.services.cost_estimation_service import CostEstimationService
+from app.services.asset_access_service import build_asset_access_url
 from app.services.event_log_service import event_log_service
 from app.storage.local_artifact_store import LocalArtifactStore
 from app.storage.path_planner import ArtifactStage
@@ -251,8 +252,7 @@ class LipSyncService:
                     face_asset = await AssetRepository(session).get_by_id(
                         frame.asset_id
                     )
-                    if face_asset and face_asset.storage_uri:
-                        face_image_url = face_asset.storage_uri
+                    face_image_url = await build_asset_access_url(face_asset) or ""
 
             if not face_image_url:
                 raise LipSyncServiceError(
@@ -273,8 +273,7 @@ class LipSyncService:
                     audio_asset = await AssetRepository(session).get_by_id(
                         spec.audio_asset_id
                     )
-                    if audio_asset and audio_asset.storage_uri:
-                        audio_segment_url = audio_asset.storage_uri
+                    audio_segment_url = await build_asset_access_url(audio_asset) or ""
 
             if not audio_segment_url:
                 raise LipSyncServiceError(

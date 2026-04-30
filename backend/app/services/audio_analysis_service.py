@@ -20,13 +20,14 @@ from typing import Any, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_project_logger
-from app.storage.minio_adapter import get_storage
+from app.storage.storage_factory import get_storage
 from app.domain.states import ProjectStage
 from app.models.audio_analysis import AudioAnalysisVersion
 from app.repositories.audio_analysis_repository import AudioAnalysisRepository
 from app.repositories.project_repository import ProjectRepository
 from app.repositories.project_spec_repository import ProjectSpecRepository
 from app.repositories.unit_of_work import UnitOfWork
+from app.services.asset_access_service import build_asset_access_url
 from app.services.state_transition_service import state_transition_service
 from app.agents.audio_analysis_agent import AudioAnalysisAgent
 from app.tools.audio_analysis_tool import analyze as _beat_analyze
@@ -132,7 +133,7 @@ class AudioAnalysisService:
             trimmed_bucket: str = trimmed_asset.bucket_name
             trimmed_key: str = trimmed_asset.object_key
             # 16-03：UoW 内提前提取 storage_uri（commit 后 ORM 对象 detached，直接访问可能触发 DetachedInstanceError）
-            trimmed_storage_uri: str = trimmed_asset.storage_uri or ""
+            trimmed_storage_uri = await build_asset_access_url(trimmed_asset) or ""
             # commit trim 事务
         # UoW 退出时自动 commit
 

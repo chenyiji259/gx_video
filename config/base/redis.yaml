@@ -1,14 +1,25 @@
 # Redis Configuration
 
 redis:
-  # 服务器连接信息
-  host: 8.134.170.191
-  port: 6379
-  # 密码通过环境变量注入，不硬编码（在 .env 中设置 REDIS_PASSWORD=你的密码）
-  password: "${REDIS_PASSWORD}"
+  # 当前使用的 Redis 配置：
+  # - existing_remote: 原有远程 Redis，后续需要时可切回
+  # - server_docker: 服务器 Docker 容器 redis_video（当前本地代码远程连接）
+  active_profile: existing_remote
 
-  # 数据库编号
-  db: 0
+  profiles:
+    existing_remote:
+      host: 8.134.170.191
+      port: 6379
+      # 密码通过环境变量注入，不硬编码（在 .env 中设置 REDIS_PASSWORD=你的密码）
+      password: "${REDIS_PASSWORD}"
+      db: 0
+
+    server_docker:
+      host: 8.163.17.239
+      port: 16379
+      # redis_video 未设置密码
+      password: ""
+      db: 0
 
   # 连接池配置
   pool:

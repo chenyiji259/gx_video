@@ -2,7 +2,7 @@
 
 工程约束（doc 03 / doc 08）：
   对象存储层统一封装为 ObjectStorageAdapter。
-  第一版使用 MinIO，后续可无业务层改动地替换为 S3 / 阿里云 OSS。
+  统一对接对象存储，当前实现为阿里云 OSS。
 
 接口定义使用 Python Protocol，实现类无需显式继承。
 """
@@ -28,7 +28,7 @@ class ObjectMetadata:
 class ObjectStorageAdapter(Protocol):
     """对象存储统一接口协议。
 
-    所有实现类（MinIO、S3 等）必须实现以下方法。
+    所有对象存储实现类都必须实现以下方法。
     """
 
     def upload_file(

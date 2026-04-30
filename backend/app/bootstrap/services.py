@@ -1,16 +1,16 @@
 """Service health checks and dependency management.
 
-负责在应用启动/关闭时检查 Postgres / Redis / MinIO 连通性。
+负责在应用启动/关闭时检查 Postgres / Redis / OSS 连通性。
 """
 import asyncio
 from typing import Optional
 
 import asyncpg
 import redis.asyncio as aioredis
-from minio import Minio
 
 from app.core.logging import get_logger
 from app.core.settings import settings
+from app.storage.storage_factory import get_storage
 
 _logger = get_logger("bootstrap.services", layer="system")
 
@@ -21,7 +21,7 @@ class ServiceManager:
     def __init__(self) -> None:
         self.pg_pool: Optional[asyncpg.Pool] = None
         self.redis_client: Optional[aioredis.Redis] = None
-        self.minio_client: Optional[Minio] = None
+        self.storage_client: Optional[object] = None
 
     async def check_postgres(self) -> bool:
         """检查 PostgreSQL 连通性。"""
@@ -58,35 +58,27 @@ class ServiceManager:
             _logger.error(f"Redis 连接检查失败: {e}", event_type="dependency_check_failed")
             return False
 
-    async def check_minio(self) -> bool:
-        """检查 MinIO 连通性。
-
-        注意：Minio 客户端接受 "host:port" 格式的 endpoint。
-        """
+    async def check_storage(self) -> bool:
+        """检查对象存储连通性。"""
         try:
-            self.minio_client = Minio(
-                settings.minio_endpoint,
-                access_key=settings.minio_access_key,
-                secret_key=settings.minio_secret_key,
-                secure=settings.minio_secure,
-            )
-            # bucket_exists 是同步调用，放到线程池执行
-            await asyncio.to_thread(
-                self.minio_client.bucket_exists, settings.minio_bucket
+            self.storage_client = get_storage()
+            await self.storage_client.async_object_exists(
+                ".health_probe",
+                bucket=settings.storage_bucket,
             )
             return True
         except Exception as e:
-            _logger.error(f"MinIO 连接检查失败: {e}", event_type="dependency_check_failed")
+            _logger.error(f"对象存储连接检查失败: {e}", event_type="dependency_check_failed")
             return False
 
     async def check_all(self) -> dict[str, bool]:
         """并发检查所有依赖服务，返回各服务状态。"""
-        pg_ok, redis_ok, minio_ok = await asyncio.gather(
+        pg_ok, redis_ok, storage_ok = await asyncio.gather(
             self.check_postgres(),
             self.check_redis(),
-            self.check_minio(),
+            self.check_storage(),
         )
-        results = {"postgres": pg_ok, "redis": redis_ok, "minio": minio_ok}
+        results = {"postgres": pg_ok, "redis": redis_ok, "storage": storage_ok}
         all_ok = all(results.values())
         status = "全部正常" if all_ok else "部分服务不可用"
         _logger.info(
@@ -107,11 +99,10 @@ service_manager = ServiceManager()
 
 
 def initialize_storage_singleton() -> None:
-    """CLASS-05 修复：应用启动时显式初始化 MinIO 存储单例。
+    """应用启动时显式初始化 OSS 存储单例。
 
     将原来的懒加载单例改为在启动阶段一次性初始化，
     避免运行期并发路径下重复创建客户端的风险。
     """
-    from app.storage.minio_adapter import get_storage  # noqa: PLC0415
     get_storage()
     _logger.info("存储客户端已初始化", event_type="storage_singleton_init")

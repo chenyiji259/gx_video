@@ -9,7 +9,7 @@
 /ready 检查项目：
   - Postgres：SQLAlchemy 异步引擎 SELECT 1（复用连接池）
   - Redis：PING
-  - MinIO：bucket_exists
+  - 对象存储：bucket/object exists
   - 后台任务：OutboxPublisher / TaskWorker asyncio.Task 状态
 """
 from __future__ import annotations
@@ -26,7 +26,7 @@ from app.core.config import get_config
 from app.core.database import get_session_factory
 from app.core.logging import get_logger
 from app.core.settings import settings
-from app.storage.minio_adapter import get_storage
+from app.storage.storage_factory import get_storage
 
 router = APIRouter()
 _logger = get_logger("api.health", layer="system")
@@ -62,22 +62,22 @@ async def readiness_check() -> JSONResponse:
     检查项目：
       - postgres  ： SELECT 1 通过 SQLAlchemy 连接池
       - redis     ： PING
-      - minio     ： bucket_exists
+      - storage   ： 对象可达检查
       - tasks     ： OutboxPublisher / TaskWorker asyncio.Task 状态
     """
     checks: dict[str, str] = {}
 
     # 并发执行三个依赖检查
-    pg_ok, redis_ok, minio_ok = await asyncio.gather(
+    pg_ok, redis_ok, storage_ok = await asyncio.gather(
         _check_postgres(),
         _check_redis(),
-        _check_minio(),
+        _check_storage(),
         return_exceptions=True,
     )
 
     checks["postgres"] = "ok" if pg_ok is True else f"fail: {_fmt_err(pg_ok)}"
     checks["redis"]    = "ok" if redis_ok is True else f"fail: {_fmt_err(redis_ok)}"
-    checks["minio"]    = "ok" if minio_ok is True else f"fail: {_fmt_err(minio_ok)}"
+    checks["storage"]  = "ok" if storage_ok is True else f"fail: {_fmt_err(storage_ok)}"
 
     # 后台 asyncio 任务状态
     checks["outbox_publisher"] = _check_task("outbox_publisher")
@@ -128,11 +128,11 @@ async def _check_redis() -> bool:
     return True
 
 
-async def _check_minio() -> bool:
-    """bucket_exists 通过已有 MinIO 单例。"""
+async def _check_storage() -> bool:
+    """通过已有存储单例检查对象存储可达性。"""
     storage = get_storage()
     cfg = get_config().storage
-    await storage.object_exists(cfg.bucket, ".health_probe")
+    await storage.async_object_exists(".health_probe", bucket=cfg.bucket)
     return True
 
 

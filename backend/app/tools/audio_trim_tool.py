@@ -31,7 +31,7 @@ from app.core.logging import get_tool_logger
 from app.models.asset import Asset
 from app.repositories.asset_repository import AssetRepository
 from app.storage.local_artifact_store import LocalArtifactStore
-from app.storage.minio_adapter import get_storage
+from app.storage.storage_factory import get_storage
 from app.storage.path_planner import ArtifactStage
 from app.utils.ids import generate_ulid
 

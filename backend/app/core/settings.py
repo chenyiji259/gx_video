@@ -42,16 +42,16 @@ class Settings:
         self.redis_password: str = cfg.redis.password
         self.redis_db: int = cfg.redis.db
 
-        # --- MinIO ---
-        # endpoint 格式："host:port"，例如 "10.60.1.102:9000"
-        self.minio_endpoint: str = cfg.storage.endpoint
-        self.minio_access_key: str = cfg.storage.access_key
-        self.minio_secret_key: str = cfg.storage.secret_key
-        self.minio_bucket: str = cfg.storage.bucket
-        self.minio_secure: bool = cfg.storage.secure
-        self.minio_region: str = cfg.storage.region
-        self.minio_presigned_expiry: int = cfg.storage.presigned_expiry
-        self.minio_max_upload_size: int = cfg.storage.max_upload_size
+        # --- Object Storage / OSS ---
+        self.storage_endpoint: str = cfg.storage.endpoint
+        self.storage_public_base_url: str = cfg.storage.public_base_url
+        self.storage_access_key: str = cfg.storage.access_key
+        self.storage_secret_key: str = cfg.storage.secret_key
+        self.storage_bucket: str = cfg.storage.bucket
+        self.storage_secure: bool = cfg.storage.secure
+        self.storage_region: str = cfg.storage.region
+        self.storage_presigned_expiry: int = cfg.storage.presigned_expiry
+        self.storage_max_upload_size: int = cfg.storage.max_upload_size
 
     def get_database_url(self) -> str:
         """异步兼容的 PostgreSQL 连接 URL（asyncpg 驱动）。"""

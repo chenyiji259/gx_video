@@ -4,11 +4,11 @@
 
 设计约束：
   - 资产一经落库不允许修改（不可变），故只有 created_at，无 updated_at
-  - storage_uri 存储永久直链 URL（http://{minio_endpoint}/{bucket}/{key}）
+  - storage_uri 存储对象定位 URL（例如 OSS 基础地址）
   - sha256 的 partial index（WHERE sha256 IS NOT NULL）通过 migration 手动建
   - asset_type 使用 varchar + CheckConstraint，不用 Postgres ENUM
 
-MinIO 对象路径规范（doc 05 §9.3）：
+对象存储路径规范（doc 05 §9.3）：
     projects/{project_id}/assets/{asset_type}/{asset_id}/{filename}
 
 资产类型（doc 05 §9.2）：
@@ -53,8 +53,8 @@ class Asset(ULIDMixin, CreatedAtMixin, Base):
     """资产表（assets）。
 
     append-only：资产落库后不可修改，无 updated_at。
-    storage_uri 为 MinIO 永久直链（需 bucket 设置公开读），
-    不使用预签名 URL，避免过期失效。
+    storage_uri 为对象存储定位地址，
+    对外访问时由服务层按需转换为签名 URL。
     """
 
     __tablename__ = "assets"
@@ -85,8 +85,7 @@ class Asset(ULIDMixin, CreatedAtMixin, Base):
     bucket_name: Mapped[str] = mapped_column(String(128), nullable=False)
     object_key: Mapped[str] = mapped_column(String(512), nullable=False)
 
-    # 永久直链 URL（http://{endpoint}/{bucket}/{key}）
-    # 要求 MinIO bucket 设置公开读权限（或通过后端代理转发）
+    # 对象定位 URL（例如 OSS 基础地址 + object_key）
     storage_uri: Mapped[str] = mapped_column(String(1024), nullable=False)
 
     # ------------------------------------------------------------------ #

@@ -24,8 +24,9 @@ from app.providers.image.base import ImageGenerationError, get_image_provider
 from app.repositories.asset_repository import AssetRepository
 from app.repositories.unit_of_work import UnitOfWork
 from app.schemas.prompt import PromptBundle
+from app.services.asset_access_service import build_asset_access_url
 from app.storage.local_artifact_store import LocalArtifactStore
-from app.storage.minio_adapter import get_storage
+from app.storage.storage_factory import get_storage
 from app.storage.path_planner import ArtifactStage
 from app.utils.ids import generate_ulid
 
@@ -180,8 +181,8 @@ class ImageGenerationTool:
         )
         storage_uri = storage.get_permanent_url(object_key)
         logger.debug(
-            f"图片 MinIO 上传完成: object_key={object_key!r}",
-            event_type="image_minio_uploaded",
+            f"图片对象存储上传完成: object_key={object_key!r}",
+            event_type="image_storage_uploaded",
         )
 
         # ---- 步骤 5: 落库 Asset ----------------------------------------
@@ -332,15 +333,15 @@ class ImageGenerationTool:
         else:
             content_type = "image/jpeg"
 
-        # 上传到 MinIO
+        # 上传到对象存储
         storage = get_storage()
         await storage.async_upload_bytes(object_key, image_bytes, content_type=content_type)
         storage_uri = storage.get_permanent_url(object_key)
         logger.info(
-            f"参考图 MinIO 上传完成: object_key={object_key!r} "
-            f"storage_uri(永久直链)={storage_uri!r} "
-            f"endpoint={storage._endpoint!r} bucket={storage.default_bucket!r}",
-            event_type="reference_image_minio_uploaded",
+            f"参考图对象存储上传完成: object_key={object_key!r} "
+            f"storage_uri={storage_uri!r} "
+            f"endpoint={storage.endpoint!r} bucket={storage.default_bucket!r}",
+            event_type="reference_image_storage_uploaded",
         )
 
         # 落库 Asset
@@ -578,13 +579,19 @@ class ImageGenerationTool:
                 code="parent_asset_not_found",
             )
 
+        parent_access_url = await build_asset_access_url(parent_asset)
+        if not parent_access_url:
+            raise ImageGenerationError(
+                f"九宫格大图 asset {parent_asset_id!r} 无可访问 URL",
+                code="parent_asset_url_missing",
+            )
         logger.info(
             f"开始读取九宫格大图并准备切分: grid_index={grid_index} "
-            f"parent_asset_id={parent_asset_id!r} parent_url={parent_asset.storage_uri[:160]!r}",
+            f"parent_asset_id={parent_asset_id!r} parent_url={parent_access_url[:160]!r}",
             event_type="nine_grid_split_parent_fetch_start",
         )
         parent_download_started_at = time.monotonic()
-        parent_bytes = await self._download_image(parent_asset.storage_uri, timeout=120)
+        parent_bytes = await self._download_image(parent_access_url, timeout=120)
         logger.info(
             f"九宫格大图读取完成: grid_index={grid_index} bytes={len(parent_bytes)} "
             f"elapsed={time.monotonic() - parent_download_started_at:.2f}s",

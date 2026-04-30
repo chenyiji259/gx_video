@@ -22,25 +22,36 @@ agent: creative_planning
 
 ---
 
-## 核心时长规划规则（doc 21 §3.3，已改为可变 shot 时长）
+## 核心时长规划规则（当前版本：单张九宫格 / 3-shot）
 
-九宫格分镜不再假设每个 shot 固定 10 秒。你必须根据用户目标时长、内容密度、平台节奏，
-为后续剧本阶段规划一个合理的 `shot_count`，并明确允许的单 shot 时长档位。
+当前版本先只支持**单张九宫格**的视频创作闭环。
+你必须把用户需求规划为：
+- `grid_count = 1`
+- `shot_count = 3`
+- `total_shots_generated = 3`
+- 每个 shot 默认按约 10 秒规划，总时长控制在 30 秒以内
+
+这 3 个 shot 会在后续 storyboard 阶段映射成：
+- 第 1 行 = shot 1 的 起始 / 中间 / 结尾
+- 第 2 行 = shot 2 的 起始 / 中间 / 结尾
+- 第 3 行 = shot 3 的 起始 / 中间 / 结尾
+
+注意：这里不再使用“9 帧 = 8 个 shot 的首尾帧重叠模式”。
 
 规则：
 
 ```
 allowed_shot_durations_sec = 来自输入的当前视频模型支持档位
-shot_count                 = 你根据内容复杂度规划的实际 shot 数
-grid_count                 = ceil(shot_count / 8)
-total_shots_generated      = shot_count
+shot_count                 = 3
+grid_count                 = 1
+total_shots_generated      = 3
 ```
 
 规划要求：
-- 信息密度高、剧情复杂、真人演绎多时，通常需要更多 shot
-- 广告、CTA、纯展示类通常可以用更少 shot
-- `total_shots_generated` 必须等于实际要生成的 shot 数，不再补齐到 8/16
-- 后续 storyboard 阶段允许边界格复用最后画面，因此不需要为了凑满九宫格而虚构多余 shot
+- 当前阶段默认面向短视频需求，目标时长应尽量控制在 30 秒内
+- 即使用户输入更长时长，也先收敛成 3 个关键 shot，不要扩展到多张九宫格
+- `total_shots_generated` 必须固定等于 3
+- 每个 shot 的内容密度可以不同，但整体要能在 3 个连续镜头内完成表达
 
 ---
 
@@ -62,10 +73,10 @@ extension 会自然进入 `CreativeBriefVersion.raw_payload`，业务层通过
     "style_direction": "扁平动画+科技蓝调，2D motion graphics 质感",
     "extension": {
       "target_duration_sec": 60,
-      "shot_duration_sec": null,
-      "shot_count": 6,
+      "shot_duration_sec": 10,
+      "shot_count": 3,
       "grid_count": 1,
-      "total_shots_generated": 6,
+      "total_shots_generated": 3,
       "allowed_shot_durations_sec": [4, 5, 6, 8, 10, 12, 15],
       "character_list": [
         {
@@ -115,9 +126,9 @@ extension 会自然进入 `CreativeBriefVersion.raw_payload`，业务层通过
 
 ### extension（doc 21 §1.1 九宫格扩展字段）
 - `target_duration_sec`：用户期望视频时长，整数秒
-- `shot_duration_sec`：可为 `null`，表示后续 narrative 阶段按每个 shot 单独决定时长
+- `shot_duration_sec`：默认 10
 - `allowed_shot_durations_sec`：必须是数组，列出后续剧本允许使用的单 shot 时长档位
-- `shot_count` / `grid_count` / `total_shots_generated`：按上方规则计算，且 `total_shots_generated = shot_count`
+- `shot_count` / `grid_count` / `total_shots_generated`：当前版本固定为 `3 / 1 / 3`
 - `character_list`：每个角色的 `appearance` 必须详细足够（外貌 / 服装 / 气质），用于在九宫格 prompt 中保持一致性（doc 21 决策 C1）
 - `human_on_camera`：布尔值。`true` 表示关键画面需要真人主体入镜；`false` 表示后续镜头应避免真人主体
 - 当 `human_on_camera=true` 时：

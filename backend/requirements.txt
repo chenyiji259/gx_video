@@ -28,7 +28,7 @@ alembic>=1.14.0               # DB 迁移工具，settings.py 中已预留同步
 redis>=5.2.0
 
 # Storage
-minio>=7.2.0
+oss2>=2.18.6
 aiofiles>=24.1.0
 
 # Audio Processing
