@@ -20,15 +20,7 @@ import {
   projectApi,
   workflowApi,
 } from '../api';
-import type {
-  Clip,
-  ProjectSpec,
-  Shot,
-  StoryboardCell,
-  StoryboardGrid,
-  ViewState,
-  WorkspaceData,
-} from '../types';
+import type { Shot, ViewState, WorkspaceData } from '../types';
 
 interface WorkspaceProps {
   projectId: string;
@@ -189,14 +181,35 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
       [...(workspace?.storyboardGrids ?? [])]
         .flatMap((grid) => grid.cells || [])
         .filter((cell) => cell.shot_index !== null && cell.shot_index !== undefined)
-        .sort((a, b) => (a.shot_index ?? 0) - (b.shot_index ?? 0)),
+        .sort((a, b) => {
+          const shotDiff = (a.shot_index ?? 0) - (b.shot_index ?? 0);
+          if (shotDiff !== 0) return shotDiff;
+          return (a.cell_position ?? 0) - (b.cell_position ?? 0);
+        }),
     [workspace?.storyboardGrids]
   );
 
   const activeShot = sortedShots[selectedShotIndex] ?? null;
-  const activeCell = storyboardCells.find((cell) => cell.shot_id === activeShot?.id) || storyboardCells[selectedShotIndex] || null;
-  const prevCell = storyboardCells[Math.max(0, selectedShotIndex - 1)] || activeCell;
-  const nextCell = storyboardCells[Math.min(storyboardCells.length - 1, selectedShotIndex + 1)] || activeCell;
+  const shotCellsByShotId = useMemo(() => {
+    const map = new Map<string, typeof storyboardCells>();
+    for (const cell of storyboardCells) {
+      if (!cell.shot_id) continue;
+      const current = map.get(cell.shot_id) ?? [];
+      current.push(cell);
+      map.set(cell.shot_id, current);
+    }
+    for (const [key, cells] of map.entries()) {
+      map.set(
+        key,
+        [...cells].sort((a, b) => (a.cell_position ?? 0) - (b.cell_position ?? 0))
+      );
+    }
+    return map;
+  }, [storyboardCells]);
+  const activeShotCells = activeShot ? shotCellsByShotId.get(activeShot.id) ?? [] : [];
+  const startCell = activeShotCells[0] ?? null;
+  const middleCell = activeShotCells[1] ?? startCell;
+  const endCell = activeShotCells[2] ?? middleCell ?? startCell;
   const activeClip = workspace?.clips.find((clip) => clip.shot_id === activeShot?.id) ?? null;
 
   const currentStep = workspace ? STAGE_TO_STEP[workspace.project.current_stage] || 1 : 1;
@@ -315,7 +328,7 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
     { label: '平台', value: form.platform },
   ];
 
-  const previewMedia = workspace.latestExport?.storage_uri || workspace.timeline?.preview_uri || activeClip?.storage_uri || activeCell?.asset_url || '';
+  const previewMedia = workspace.latestExport?.storage_uri || workspace.timeline?.preview_uri || activeClip?.storage_uri || startCell?.asset_url || '';
   const primaryStep3Label = !workspace.storyboardGrids.length
     ? '生成关键帧'
     : !workspace.clips.length
@@ -498,7 +511,7 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
           <div className="col-span-5 w-full h-full min-h-0">
             <Card className="w-full h-full overflow-hidden">
               <StepBadge step="3" title="生成关键帧画面" />
-              <p className="text-gray-500 text-xs mb-3 shrink-0">AI 为每个镜头生成关键帧，确认画面效果</p>
+              <p className="text-gray-500 text-xs mb-3 shrink-0">AI 为每个镜头生成起始 / 中间 / 结尾三张关键帧，后续将按多图融合模式生成视频</p>
 
               <div className="flex items-center justify-between mb-3 shrink-0 gap-4">
                 <div className="flex items-center gap-3 min-w-0">
@@ -522,14 +535,14 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
                 <div className="flex items-center gap-2 text-violet-600 font-medium text-xs mb-2 shrink-0">
                   <span className="w-1 h-3 border-l-2 border-violet-600 rounded"></span>
                   镜头 {activeShot ? activeShot.shot_index + 1 : '--'}：{activeShot ? formatTimeRange(activeShot) : '--'}
-                  <span className="text-gray-400 font-normal ml-2">| {safeText(activeCell?.scene_description || activeShot?.subject)}</span>
+                  <span className="text-gray-400 font-normal ml-2">| {safeText(startCell?.scene_description || activeShot?.subject)}</span>
                 </div>
 
                 <div className="grid grid-cols-3 gap-3 mb-3 flex-1 min-h-0">
                   {[
-                    { label: '起始帧', cell: prevCell, active: true },
-                    { label: '中间帧', cell: activeCell, active: false },
-                    { label: '结束帧', cell: nextCell, active: false },
+                    { label: '起始帧', cell: startCell, active: true },
+                    { label: '中间帧', cell: middleCell, active: false },
+                    { label: '结束帧', cell: endCell, active: false },
                   ].map((frame, index) => (
                     <div key={index} className="relative group rounded-xl overflow-hidden h-full bg-gray-100">
                       {frame.cell?.asset_url ? (
@@ -580,16 +593,20 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
               </div>
 
               <div className="mt-3 flex gap-2 overflow-x-auto items-center justify-between border-t border-gray-100 pt-3 shrink-0">
-                {storyboardCells.length ? (
-                  storyboardCells.map((cell, idx) => (
+                {sortedShots.length ? (
+                  sortedShots.map((shot, idx) => {
+                    const cells = shotCellsByShotId.get(shot.id) ?? [];
+                    const thumb = cells[0]?.asset_url;
+                    return (
                     <button
-                      key={`${cell.asset_id}-${idx}`}
-                      onClick={() => setSelectedShotIndex(Math.min(sortedShots.length - 1, idx))}
+                      key={`${shot.id}-${idx}`}
+                      onClick={() => setSelectedShotIndex(idx)}
                       className={`w-16 aspect-video rounded-lg overflow-hidden shrink-0 border-2 ${idx === selectedShotIndex ? 'border-violet-500 shadow-sm' : 'border-transparent opacity-70 hover:opacity-100'} transition-all cursor-pointer`}
                     >
-                      {cell.asset_url ? <img src={cell.asset_url} className="w-full h-full object-cover" alt="" /> : null}
+                      {thumb ? <img src={thumb} className="w-full h-full object-cover" alt="" /> : null}
                     </button>
-                  ))
+                    );
+                  })
                 ) : (
                   <div className="text-xs text-gray-400">关键帧尚未生成</div>
                 )}
@@ -602,7 +619,7 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
           <div className="col-span-5 w-full h-full min-h-0">
             <Card className="w-full h-full overflow-hidden">
               <StepBadge step="5" title="视频生成中" />
-              <p className="text-gray-500 text-xs mb-4 shrink-0">AI 根据关键帧生成视频片段，并准备拼接时间线</p>
+              <p className="text-gray-500 text-xs mb-4 shrink-0">AI 根据每个镜头的三张关键帧做多图融合生成视频片段，并准备拼接时间线</p>
 
               <div className="mb-4 shrink-0">
                 <div className="flex justify-between text-xs font-bold text-gray-900 mb-1.5">
@@ -621,7 +638,8 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
                 {sortedShots.length ? (
                   sortedShots.map((shot) => {
                     const clip = workspace.clips.find((item) => item.shot_id === shot.id);
-                    const thumb = storyboardCells.find((cell) => cell.shot_id === shot.id)?.asset_url;
+                    const shotCells = shotCellsByShotId.get(shot.id) ?? [];
+                    const thumb = shotCells[0]?.asset_url;
                     return (
                       <div key={shot.id} className="relative z-10 flex items-center justify-between bg-white border border-gray-100 rounded-xl p-2 shadow-sm">
                         <div className="flex items-center gap-2.5">
@@ -630,7 +648,7 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
                           </div>
                           <div>
                             <div className="text-xs font-medium text-gray-900">镜头 {shot.shot_index + 1}</div>
-                            <div className="text-[10px] text-gray-400">{formatTimeRange(shot)}</div>
+                            <div className="text-[10px] text-gray-400">{formatTimeRange(shot)} · 三图融合</div>
                           </div>
                         </div>
                         <div>
@@ -660,8 +678,8 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
                     {workspace.timeline
                       ? `时间线已生成，共 ${workspace.timeline.segment_count || workspace.timelineSegments.length || 0} 段，可在 Step 6 导出。`
                       : workspace.clips.length
-                        ? '视频片段已就绪，下一步可在 Step 6 触发拼接。'
-                        : '先完成关键帧和视频片段生成，随后才能拼接导出。'}
+                        ? '3 个镜头的视频片段已就绪，下一步可在 Step 6 触发拼接。'
+                        : '先完成每个镜头的三图关键帧与融合生成，随后才能拼接导出。'}
                   </p>
                 </div>
               </div>
