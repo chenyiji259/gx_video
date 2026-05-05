@@ -383,7 +383,6 @@ class StoryboardService:
                 grid_index=grid_index,
                 total_grids=total_grids,
                 shot_descriptions=shot_descriptions,
-                prev_cell9_description=None,
             )
             await event_log_service.emit(
                 uow.session,

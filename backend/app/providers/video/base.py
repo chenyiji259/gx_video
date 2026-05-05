@@ -135,7 +135,7 @@ def get_video_provider(provider_name: Optional[str] = None) -> VideoProviderAdap
         from app.providers.video.toapis_adapter import ToAPIsAdapter
         return ToAPIsAdapter(provider_name=provider_name)
 
-    # Seedance 2.0（火山方舟 Ark，支持 first_frame + last_frame role 标记）
+    # Seedance 2.0（火山方舟 Ark，当前主路径使用三图融合；旧首尾帧模式仅兼容保留）
     if provider_name in _SEEDANCE_PROVIDERS:
         from app.providers.video.seedance_adapter import SeedanceAdapter
         return SeedanceAdapter(provider_name=provider_name)

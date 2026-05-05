@@ -856,7 +856,6 @@ class PromptCompilerService:
         total_grids: int,
         *,
         shot_descriptions: list[dict],
-        prev_cell9_description: str | None = None,
     ) -> PromptBundle:
         """编译九宫格生图 prompt。
 
@@ -865,9 +864,7 @@ class PromptCompilerService:
             project_id:             所属项目 ID
             grid_index:             第几张九宫格（从 1 开始）
             total_grids:            总九宫格张数
-            shot_descriptions:      9 个 cell 对应的 shot 描述列表（含 start_frame/end_frame/scene_description 等）
-            prev_cell9_description: 预留扩展字段。
-                当前版本默认单张九宫格，可传 None。
+            shot_descriptions:      9 个 cell 对应的 shot 描述列表（含 start/middle/end 关键画面描述）
 
         Returns:
             PromptBundle（target_type='nine_grid_image', target_id=f"grid_{grid_index:03d}"）
@@ -923,7 +920,6 @@ class PromptCompilerService:
             "character_list_json": char_list_json,
             "style_direction": style_direction,
             "aspect_ratio": ext.aspect_ratio,
-            "prev_cell9_description": prev_cell9_description or "",
             "human_on_camera": "true" if ext.human_on_camera else "false",
             "human_on_camera_text": (
                 "需要真人入镜，关键画面应以真人主体为核心，保持人物外观和服装连续一致。"
@@ -973,7 +969,7 @@ class PromptCompilerService:
         # 6. 兜底
         if not rendered_result.get("positive_prompt"):
             rendered_result = _make_fallback_nine_grid_prompt(
-                ext, grid_index, total_grids, prev_cell9_description
+                ext, grid_index, total_grids
             )
 
         # 7. 选择 image provider
@@ -1052,22 +1048,17 @@ def _make_fallback_nine_grid_prompt(
     ext: Any,
     grid_index: int,
     total_grids: int,
-    prev_cell9_description: str | None,
 ) -> dict:
     """LLM 不可用时的简单兜底（doc 21 §3 九宫格架构）。"""
     char_descs = "; ".join(
         f"{c.name}: {c.appearance}" for c in ext.character_list
     ) or "no fixed character"
 
-    bridge_note = ""
-    if prev_cell9_description:
-        bridge_note = f" Keep visual continuity with the previous grid ending state: {prev_cell9_description}."
-
     grid_spec = _resolve_nine_grid_output_spec(ext.aspect_ratio)
 
     positive = (
         f"A 3x3 grid of nine sequential cinematic frames for an AI explainer video, "
-        f"frame {grid_index} of {total_grids}.{bridge_note} "
+        f"frame {grid_index} of {total_grids}. "
         f"Each cell shows a continuous narrative moment from top-left to bottom-right. "
         f"Characters: {char_descs}. "
         + (

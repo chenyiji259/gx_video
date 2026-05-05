@@ -59,9 +59,9 @@ class VideoGenerationTool:
             project_id:           所属项目 ID。
             mode:                 生成模式，默认 image_to_video。
             shot_index:           镜头序号（用于日志输出，可选）。
-            reference_image_url:  image_to_video 的起始帧 URL（storyboard frame）。
+            reference_image_url:  旧兼容 image_to_video 模式下的起始帧 URL。
             reference_image_urls: 多图融合模式下的有序参考图 URL 列表。
-            last_frame_url:       image_to_video 的尾帧 URL（相邻 storyboard frame）。
+            last_frame_url:       旧兼容 image_to_video 模式下的尾帧 URL。
 
         Returns:
             (asset_id, duration_ms): 新建 Asset 的 ID + 实际视频时长（ms）。

@@ -458,8 +458,8 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
 
           <div className="col-span-4 w-full h-full min-h-0">
             <Card className="w-full h-full overflow-hidden">
-              <StepBadge step="2" title="生成分镜脚本" />
-              <p className="text-gray-500 text-xs mb-3 shrink-0">AI 根据你的需求，生成视频分镜脚本</p>
+              <StepBadge step="2" title="生成三镜头脚本" />
+              <p className="text-gray-500 text-xs mb-3 shrink-0">AI 根据你的需求生成 3 个镜头的脚本，每个镜头后续对应一整行 3 张关键帧</p>
 
               <div className="flex items-center gap-3 text-xs text-gray-600 mb-3 bg-gray-50 p-2.5 rounded-lg border border-gray-100 shrink-0 overflow-x-auto">
                 <div><span className="text-gray-400">视频主题:</span> <span className="font-medium text-gray-900">{safeText(workspace.brief?.title, '待生成')}</span></div>
@@ -472,7 +472,7 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
                 <div className="grid grid-cols-[40px_60px_1fr_1fr] gap-2 p-3 border-b border-gray-100 font-medium text-gray-500 bg-gray-50 text-xs">
                   <div>镜头</div>
                   <div>时间</div>
-                  <div>画面内容</div>
+                  <div>镜头内容</div>
                   <div>旁白/字幕</div>
                 </div>
                 {sortedShots.length ? (
@@ -485,7 +485,7 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
                     </div>
                   ))
                 ) : (
-                  <div className="p-6 text-sm text-gray-400 text-center">还没有分镜脚本，先在 Step 1 生成视频方案。</div>
+                  <div className="p-6 text-sm text-gray-400 text-center">还没有三镜头脚本，先在 Step 1 生成视频方案。</div>
                 )}
               </div>
 
@@ -688,8 +688,8 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
 
           <div className="col-span-7 w-full h-full min-h-0">
             <Card className="w-full h-full overflow-hidden">
-              <StepBadge step="6" title="视频生成完成" />
-              <p className="text-gray-500 text-xs mb-4 shrink-0">你的视频预览、拼接与导出都在这里收口</p>
+              <StepBadge step="6" title="拼接与导出" />
+              <p className="text-gray-500 text-xs mb-4 shrink-0">3 个三图融合视频片段会在这里拼接成时间线，并完成最终导出</p>
 
               <div className="flex gap-4 flex-1 min-h-0">
                 <div className="flex-1 h-full min-h-0">
@@ -712,8 +712,8 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
                     <div className="absolute bottom-0 inset-x-0 p-3 bg-gradient-to-t from-black/80 to-transparent flex items-center gap-2 text-white text-[10px]">
                       <Play className="w-4 h-4 cursor-pointer" />
                       <div className="h-1 bg-white/30 flex-1 rounded-full overflow-hidden cursor-pointer">
-                        <div className="h-full bg-violet-500 w-1/3"></div>
-                      </div>
+                      <div className="h-full bg-violet-500 w-1/3"></div>
+                    </div>
                       <span className="tabular-nums">00:00 / {Math.max(1, Math.round((workspace.timeline?.total_duration_ms || activeClip?.duration_ms || 30000) / 1000)).toString().padStart(2, '0')}</span>
                       <Maximize className="w-3 h-3 cursor-pointer ml-1" />
                     </div>
@@ -729,7 +729,7 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
                     <div className="flex items-center gap-1.5"><div className="w-4 flex justify-center"><Clock className="w-3 h-3" /></div>生成时间：{new Date(workspace.latestExport?.created_at || workspace.project.updated_at).toLocaleString()}</div>
                   </div>
 
-                  <h4 className="font-bold text-gray-900 mb-3 text-sm">下一步</h4>
+                  <h4 className="font-bold text-gray-900 mb-3 text-sm">操作</h4>
                   <div className="flex flex-col gap-2">
                     <button className="w-full bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 rounded-lg py-2 text-xs font-medium transition-colors flex items-center justify-center gap-1.5 opacity-60 cursor-not-allowed">
                       <PenSquare className="w-3 h-3 text-gray-400" /> 编辑视频

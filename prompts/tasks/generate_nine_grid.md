@@ -16,7 +16,6 @@ variables:
   - grid_orientation
   - cell_width
   - cell_height
-  - prev_cell9_description
   - human_on_camera
   - human_on_camera_text
 ---
@@ -71,17 +70,6 @@ variables:
 同一行内的 3 个 cell 必须表现为**同一个镜头内部的连续过程**，而不是 3 个独立镜头。
 
 ---
-
-{% if prev_cell9_description %}
-## 跨九宫格说明（预留）
-
-当前版本前端和后端默认只使用单张九宫格。
-如果后续进入多张九宫格扩展，再把上一张的衔接信息纳入设计。
-
-上一张的结尾画面参考：
-{{ prev_cell9_description }}
-
-{% endif %}
 
 ## 角色一致性约束（doc 21 决策 C1）
 

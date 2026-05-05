@@ -15,9 +15,8 @@ API 认证：
 实际生产前需用真实 API key 验证。如有偏差请调整 _SUBMIT_PATH / _QUERY_PATH。
 
 特殊参数支持：
-  params['last_frame_url'] - 旧模式尾帧 URL
-  params['reference_image_urls'] - 新模式三图融合 URL 列表（起始 / 中间 / 结尾）
-  reference_image_url - 旧模式首帧 URL
+  params['reference_image_urls'] - 三图融合 URL 列表（起始 / 中间 / 结尾）
+  reference_image_url / params['last_frame_url'] - 旧首尾帧模式兼容字段
 
 文档：docs/api/seedance2-video-generation-api.md
 """
@@ -51,11 +50,14 @@ class SeedanceAdapter:
     用法：
         adapter = SeedanceAdapter("seedance_2")
         result = await adapter.generate(
-            "图片1中的程序员推开门进入服务器机房",
-            mode="image_to_video",
-            reference_image_url="https://.../cell_1.png",
+            "让图片1中的产品展示状态，平滑过渡到图片2中的中间动作，再发展到图片3中的结尾状态，形成一个连续镜头。",
+            mode="multi_image_fusion",
             params={
-                "last_frame_url": "https://.../cell_2.png",
+                "reference_image_urls": [
+                    "https://.../cell_1.png",
+                    "https://.../cell_2.png",
+                    "https://.../cell_3.png",
+                ],
                 "duration": 8,
                 "ratio": "9:16",
                 "resolution": "1080p",
@@ -108,10 +110,11 @@ class SeedanceAdapter:
 
         Args:
             prompt:               提示词（中英文，须用 "图片1/视频1/音频1" 引用素材）。
-            mode:                 image_to_video / text_to_video。
-            reference_image_url:  i2v 模式下的首帧 URL（doc 21 §3.2 cell N 图）。
+            mode:                 multi_image_fusion / image_to_video / text_to_video。
+            reference_image_url:  旧兼容模式下的首帧 URL。
             params:               支持以下额外字段：
-                last_frame_url     尾帧 URL（cell N+1 图）
+                reference_image_urls  三图融合参考图列表
+                last_frame_url        旧兼容模式尾帧 URL
                 duration / ratio / resolution
                 generate_audio / watermark
         """
@@ -164,8 +167,8 @@ class SeedanceAdapter:
         _logger.info(
             f"Seedance 2.0 提交: model={self._model_name!r} mode={mode!r} "
             f"duration={payload['duration']}s ratio={payload['ratio']!r} "
-            f"first_frame={bool(reference_image_url)} last_frame={bool(last_frame_url)} "
             f"multi_ref_count={len(reference_image_urls)} "
+            f"legacy_first_last={bool(reference_image_url or last_frame_url)} "
             f"prompt_len={len(prompt)}",
             event_type="seedance_submit",
         )

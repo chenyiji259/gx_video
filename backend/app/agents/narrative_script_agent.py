@@ -146,7 +146,7 @@ def _build_fallback_dialogues(user_prompt: str, total_shots: int) -> list[str]:
     return explainer_lines
 
 
-def _fallback_narrative_content(user_prompt: str, total_shots: int = 8) -> dict:
+def _fallback_narrative_content(user_prompt: str, total_shots: int = 3) -> dict:
     """规则兜底的最小叙事剧本结构（doc 21 §2.3 新流程：按 shot 划分）。"""
     fallback_dialogues = _build_fallback_dialogues(user_prompt, total_shots)
     fallback_durations = [8] * total_shots
@@ -158,6 +158,7 @@ def _fallback_narrative_content(user_prompt: str, total_shots: int = 8) -> dict:
             "scene_description": "与视频风格匹配的默认场景",
             "characters_in_shot": [],
             "start_frame_description": f"第 {i + 1} 个 shot 的起始画面（兜底）",
+            "middle_frame_description": f"第 {i + 1} 个 shot 的中间画面（兜底）",
             "end_frame_description": f"第 {i + 1} 个 shot 的结束画面（兜底）",
             "action_description": "镜头平稳推进，主体保持静态",
             "dialogue": fallback_dialogues[i] if i < len(fallback_dialogues) else "",
@@ -167,7 +168,7 @@ def _fallback_narrative_content(user_prompt: str, total_shots: int = 8) -> dict:
     return {
         "story_arc": (
             f"AI 生成视频默认剧本：{user_prompt[:80] if user_prompt else '通用 AI 视频'}。"
-            f"共 {total_shots} 个 shot，按兜底节奏平稳过渡。"
+            f"共 {total_shots} 个 shot，每个 shot 对应起始 / 中间 / 结束三段关键画面。"
         ),
         "characters": [],
         "scenes": [],
@@ -327,7 +328,7 @@ class NarrativeScriptAgent:
             f"scenes 必须从 shot 的场景中抽成结构化数组，不能为空；"
             f"根对象还必须包含 audio_strategy；每个 shot 还必须包含 audio_strategy。"
             f"每个 shot 必须包含 shot_index / duration_sec / scene_description / "
-            f"characters_in_shot / start_frame_description / end_frame_description / "
+            f"characters_in_shot / start_frame_description / middle_frame_description / end_frame_description / "
             f"action_description / dialogue / audio_strategy / emotion / emotion_intensity。"
             f"请先判断这是讲解类、广告类、剧情类还是纯视觉表达，再决定哪些 shot 的 dialogue 非空。"
             f"dialogue 字段必须存在，但不是每个 shot 都必须有实际台词内容。"
