@@ -191,7 +191,7 @@ class SeedanceAdapter:
         merged: dict[str, Any],
     ) -> dict[str, Any]:
         """构建 Seedance 2.0 任务请求体（含 content 数组）。"""
-        # content 数组：text + 多模态素材（doc 21 §6 文档 §6）
+        # content 数组：text + 多模态素材。Seedance 2.0 当前要求每个素材项显式声明 role。
         content: list[dict[str, Any]] = [
             {"type": "text", "text": prompt}
         ]
@@ -201,6 +201,7 @@ class SeedanceAdapter:
                 content.append({
                     "type": "image_url",
                     "image_url": {"url": image_url},
+                    "role": "reference_image",
                 })
         elif mode == "image_to_video":
             if first_frame_url:

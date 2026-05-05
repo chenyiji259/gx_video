@@ -25,7 +25,7 @@ class ClipVersion(Base, ULIDMixin, CreatedAtMixin):
     __table_args__ = (
         UniqueConstraint("shot_id", "version_no", name="uq_clip_versions_shot_no"),
         CheckConstraint(
-            "generation_mode IN ('image_to_video','text_to_video','video_to_video','lipsync')",
+            "generation_mode IN ('image_to_video','text_to_video','video_to_video','multi_image_fusion','lipsync')",
             name="ck_clip_versions_mode",
         ),
         CheckConstraint(

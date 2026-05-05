@@ -2,8 +2,10 @@ import type {
   Clip,
   CreativeBrief,
   ExportRecord,
+  NarrativeScript,
   Project,
   ProjectSpec,
+  PendingDecision,
   Shot,
   StoryboardGrid,
   StyleBible,
@@ -157,6 +159,10 @@ export const projectApi = {
     return request(`/projects/${projectId}/style/active`);
   },
 
+  getNarrative(projectId: string): Promise<NarrativeScript> {
+    return request(`/projects/${projectId}/narrative/active`);
+  },
+
   getShots(projectId: string): Promise<{ items: Shot[] }> {
     return request(`/projects/${projectId}/shots`);
   },
@@ -180,9 +186,37 @@ export const projectApi = {
   getLatestExport(projectId: string): Promise<ExportRecord> {
     return request(`/projects/${projectId}/exports/latest`);
   },
+
+  listDecisions(projectId: string): Promise<{ items: PendingDecision[]; total: number }> {
+    return request(`/projects/${projectId}/decisions`);
+  },
+
+  selectDecision(
+    projectId: string,
+    decisionId: string,
+    selectedOptionId: string
+  ): Promise<PendingDecision> {
+    return request(`/projects/${projectId}/decisions/${decisionId}/select`, {
+      method: 'POST',
+      body: JSON.stringify({ selected_option_id: selectedOptionId }),
+    });
+  },
+
+  regenerateShot(projectId: string, shotId: string): Promise<Clip> {
+    return request(`/projects/${projectId}/shots/${shotId}/regenerate`, {
+      method: 'POST',
+      headers: {
+        'X-Idempotency-Key': `${projectId}-${shotId}-${Date.now()}`,
+      },
+    });
+  },
 };
 
 export const workflowApi = {
+  generateCreativePackage(projectId: string) {
+    return request(`/projects/${projectId}/workflow/generate-creative-package`, { method: 'POST' });
+  },
+
   generateBrief(projectId: string) {
     return request(`/projects/${projectId}/workflow/generate-brief`, { method: 'POST' });
   },

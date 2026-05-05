@@ -80,11 +80,12 @@ https://ark.cn-beijing.volces.com/api/v3
   "type": "image_url",
   "image_url": {
     "url": "https://example.com/reference.png"
-  }
+  },
+  "role": "reference_image"
 }
 ```
 
-图片可传 0~9 张。
+图片可传 0~9 张。Seedance 2.0 当前接口要求图片素材显式声明 `role`。普通参考图使用 `reference_image`；强首帧/尾帧约束使用 `first_frame` / `last_frame`。
 
 ### 6.3 视频输入
 
@@ -93,7 +94,8 @@ https://ark.cn-beijing.volces.com/api/v3
   "type": "video_url",
   "video_url": {
     "url": "https://example.com/reference.mp4"
-  }
+  },
+  "role": "reference_video"
 }
 ```
 
@@ -106,7 +108,8 @@ https://ark.cn-beijing.volces.com/api/v3
   "type": "audio_url",
   "audio_url": {
     "url": "https://example.com/reference.mp3"
-  }
+  },
+  "role": "reference_audio"
 }
 ```
 
@@ -190,10 +193,10 @@ https://ark.cn-beijing.volces.com/api/v3
       "type": "text",
       "text": "全程使用视频1的第一视角构图，全程使用音频1作为背景音乐。首帧为图片1，尾帧定格为图片2。"
     },
-    { "type": "image_url", "image_url": { "url": "https://example.com/first.png" } },
-    { "type": "image_url", "image_url": { "url": "https://example.com/last.png" } },
-    { "type": "video_url", "video_url": { "url": "https://example.com/ref.mp4" } },
-    { "type": "audio_url", "audio_url": { "url": "https://example.com/bgm.mp3" } }
+    { "type": "image_url", "image_url": { "url": "https://example.com/first.png" }, "role": "reference_image" },
+    { "type": "image_url", "image_url": { "url": "https://example.com/last.png" }, "role": "reference_image" },
+    { "type": "video_url", "video_url": { "url": "https://example.com/ref.mp4" }, "role": "reference_video" },
+    { "type": "audio_url", "audio_url": { "url": "https://example.com/bgm.mp3" }, "role": "reference_audio" }
   ],
   "ratio": "9:16",
   "duration": 8,
@@ -213,8 +216,8 @@ https://ark.cn-beijing.volces.com/api/v3
       "type": "text",
       "text": "将视频1礼盒中的香水替换成图片1中的面霜，保持原视频运镜不变。"
     },
-    { "type": "video_url", "video_url": { "url": "https://example.com/origin.mp4" } },
-    { "type": "image_url", "image_url": { "url": "https://example.com/product.png" } }
+    { "type": "video_url", "video_url": { "url": "https://example.com/origin.mp4" }, "role": "reference_video" },
+    { "type": "image_url", "image_url": { "url": "https://example.com/product.png" }, "role": "reference_image" }
   ],
   "ratio": "16:9",
   "duration": 8,
@@ -234,9 +237,9 @@ https://ark.cn-beijing.volces.com/api/v3
       "type": "text",
       "text": "视频1中的拱形窗户打开，进入美术馆室内，接视频2，之后镜头进入画内，接视频3。"
     },
-    { "type": "video_url", "video_url": { "url": "https://example.com/video1.mp4" } },
-    { "type": "video_url", "video_url": { "url": "https://example.com/video2.mp4" } },
-    { "type": "video_url", "video_url": { "url": "https://example.com/video3.mp4" } }
+    { "type": "video_url", "video_url": { "url": "https://example.com/video1.mp4" }, "role": "reference_video" },
+    { "type": "video_url", "video_url": { "url": "https://example.com/video2.mp4" }, "role": "reference_video" },
+    { "type": "video_url", "video_url": { "url": "https://example.com/video3.mp4" }, "role": "reference_video" }
   ],
   "ratio": "16:9",
   "duration": 8,
@@ -279,7 +282,8 @@ Seedance 2.0 系列不支持直接上传含有真人人脸的参考图或视频�
   "type": "image_url",
   "image_url": {
     "url": "asset://<asset ID>"
-  }
+  },
+  "role": "reference_image"
 }
 ```
 
@@ -340,10 +344,12 @@ create_resp = client.content_generation.tasks.create(
         {
             "type": "image_url",
             "image_url": {"url": "asset://<virtual-human-asset-id>"},
+            "role": "reference_image",
         },
         {
             "type": "image_url",
             "image_url": {"url": "https://example.com/product.png"},
+            "role": "reference_image",
         },
     ],
     ratio="16:9",
@@ -395,6 +401,7 @@ while True:
 
 - [ ] `ARK_API_KEY` 不写入代码仓库，只通过环境变量或密钥管理注入。
 - [ ] 服务端校验 `content` 中图片不超过 9 张、视频不超过 3 个、音频不超过 3 个。
+- [ ] 图片、视频、音频素材项显式声明 `role`，普通参考素材分别使用 `reference_image`、`reference_video`、`reference_audio`。
 - [ ] 禁止“纯音频”和“文本+音频”这类官方不支持组合。
 - [ ] 首尾帧强一致需求使用 `role=first_frame` / `role=last_frame`，不要只靠提示词描述。
 - [ ] 提示词引用素材使用“图片1 / 视频1 / 音频1”格式，不使用 asset id。

@@ -21,6 +21,7 @@ import redis.asyncio as aioredis
 
 from app.core.logging import get_project_logger
 from app.core.redis_utils import build_redis_url
+from app.domain.states import ProjectStage
 from app.models.clip import ClipVersion
 from app.providers.video.base import VideoGenerationError
 from app.schemas.event import ProjectEvent
@@ -42,6 +43,7 @@ from app.services.cost_estimation_service import CostEstimationService
 from app.services.concurrency_guard_service import ConcurrencyError, concurrency_guard
 from app.services.asset_access_service import build_asset_access_url
 from app.services.prompt_compiler_service import PromptCompilerError, PromptCompilerService
+from app.services.state_transition_service import state_transition_service
 from app.storage.local_artifact_store import LocalArtifactStore
 from app.storage.path_planner import ArtifactStage
 from app.tools.video_generation_tool import VideoGenerationTool
@@ -250,6 +252,11 @@ class ShotRegenerationService:
                 user_id=user_id,
                 logger=logger,
             )
+            await self._restore_failed_project_if_ready(
+                project_id=project_id,
+                user_id=user_id,
+                logger=logger,
+            )
         except Exception:
             if idem_locked:
                 await self._release_idempotency_key(idempotency_key)  # type: ignore[arg-type]
@@ -297,6 +304,34 @@ class ShotRegenerationService:
             event_type="shot_regen_done",
         )
         return clip
+
+    async def _restore_failed_project_if_ready(
+        self,
+        *,
+        project_id: str,
+        user_id: str,
+        logger: Any,
+    ) -> None:
+        """失败镜头重生成后，若所有 shot 都已有 active clip，则恢复项目阶段。"""
+        async with UnitOfWork() as uow:
+            session = uow.session
+            project = await ProjectRepository(session).get_by_id_for_user(project_id, user_id)
+            if project is None or project.current_stage != ProjectStage.FAILED.value:
+                return
+
+            shots = await ShotRepository(session).list_by_project(project_id)
+            active_clips = await ClipRepository(session).list_active_by_project(project_id)
+            active_shot_ids = {clip.shot_id for clip in active_clips}
+            if shots and all(shot.id in active_shot_ids for shot in shots):
+                await state_transition_service.advance_project(
+                    session,
+                    project,
+                    ProjectStage.CLIPS_READY,
+                )
+                logger.info(
+                    "失败项目已恢复到 clips_ready：所有镜头均已有 active clip",
+                    event_type="shot_regen_project_restored",
+                )
 
     # ------------------------------------------------------------------
     # 辅助：校验并加载上下文

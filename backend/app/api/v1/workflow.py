@@ -27,6 +27,8 @@ from app.models.user import User
 from app.repositories.decision_repository import DecisionRepository
 from app.repositories.project_repository import ProjectRepository
 from app.repositories.unit_of_work import UnitOfWork
+from app.repositories.visual_bible_repository import NarrativeScriptVersionRepository
+from app.repositories.storyboard_repositories import StoryboardVersionRepository
 # from app.services.audio_analysis_service import AudioAnalysisError, AudioAnalysisService  # 旧流程：已停用
 from app.services.brief_persistence_service import (
     BriefGenerationError,
@@ -55,9 +57,10 @@ from app.repositories.character_reference_repository import CharacterReferenceRe
 from app.repositories.scene_reference_repository import SceneReferenceRepository
 from app.tasks.dispatcher import task_dispatcher
 from app.services.director_report_service import director_report_service
+from app.services.conversation_service import ConversationService
+from app.services.decision_service import DecisionService
 from app.services.event_log_service import event_log_service
 from app.schemas.event import ProjectEvent
-import asyncio
 
 from app.core.logging import get_logger
 
@@ -70,33 +73,61 @@ _logger = get_logger("api.v1.workflow", layer="api")
 # ---------------------------------------------------------------------------
 
 async def _get_selected_decision(
-    project_id: str, decision_type: str
+    project_id: str, decision_type: str, target_entity_id: str | None = None
 ) -> dict[str, Any] | None:
     """查找并返回指定类型的最近 selected 决策，不存在则返回 None。"""
     async with UnitOfWork() as uow:
-        decisions = await DecisionRepository(uow.session).list_by_type(
+        repo = DecisionRepository(uow.session)
+        decisions = await repo.list_by_type(
             project_id, decision_type, status="selected"
         )
-    if not decisions:
-        return None
-    d = decisions[0]
-    return {
-        "id": d.id,
-        "decision_type": d.decision_type,
-        "selected_option_id": d.selected_option_id,
-        "status": d.status,
-    }
+        if not decisions:
+            return None
+        if target_entity_id is not None:
+            exact = [
+                d for d in decisions
+                if getattr(d, "target_entity_id", None) == target_entity_id
+            ]
+            if exact:
+                decisions = exact
+            else:
+                current_open = await repo.list_by_type(
+                    project_id, decision_type, status="open"
+                )
+                has_bound_open = any(
+                    getattr(d, "target_entity_id", None) == target_entity_id
+                    for d in current_open
+                )
+                if has_bound_open:
+                    return None
+                decisions = [
+                    d for d in decisions
+                    if getattr(d, "target_entity_id", None) is None
+                ]
+                if not decisions:
+                    return None
+        d = decisions[0]
+        return {
+            "id": d.id,
+            "decision_type": d.decision_type,
+            "target_entity_id": d.target_entity_id,
+            "selected_option_id": d.selected_option_id,
+            "status": d.status,
+        }
 
 
 async def _require_selected_decision(
-    project_id: str, decision_type: str, req_id: str
+    project_id: str,
+    decision_type: str,
+    req_id: str,
+    target_entity_id: str | None = None,
 ) -> str:
     """确保指定 decision_type 已 selected，否则抛 decision_required HTTPException。
 
     Returns:
         selected_option_id
     """
-    decision = await _get_selected_decision(project_id, decision_type)
+    decision = await _get_selected_decision(project_id, decision_type, target_entity_id)
     if decision is None:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -110,6 +141,47 @@ async def _require_selected_decision(
             },
         )
     return decision["selected_option_id"] or ""
+
+
+async def _cancel_open_decisions(
+    project_id: str,
+    decision_types: set[str],
+) -> None:
+    """取消会造成新 UI 双轨语义的旧 open 决策。"""
+    async with UnitOfWork() as uow:
+        repo = DecisionRepository(uow.session)
+        for decision_type in decision_types:
+            decisions = await repo.list_by_type(
+                project_id, decision_type, status="open"
+            )
+            for decision in decisions:
+                decision.status = "cancelled"
+                uow.session.add(decision)
+
+
+async def _create_project_decision(
+    *,
+    project_id: str,
+    user_id: str,
+    decision_type: str,
+    target_entity_id: str,
+    options_payload: list[dict[str, str]],
+    default_option_id: str = "confirm",
+) -> dict:
+    """创建绑定当前产物版本的项目级确认决策。"""
+    session = await ConversationService().get_or_create_session(
+        project_id=project_id,
+        user_id=user_id,
+    )
+    return await DecisionService().create_decision(
+        project_id=project_id,
+        session_id=session["id"],
+        decision_type=decision_type,
+        target_entity_type="project",
+        target_entity_id=target_entity_id,
+        options_payload=options_payload,
+        default_option_id=default_option_id,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -228,6 +300,116 @@ async def trigger_generate_brief(
             "title": brief_version.title,
             "summary": brief_version.summary,
             "message": "创意方案已生成，项目已推进到 brief_ready 阶段。",
+        },
+        request_id=req_id,
+    )
+
+
+@router.post("/projects/{project_id}/workflow/generate-creative-package")
+async def trigger_generate_creative_package(
+    project_id: str,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """生成新 UI 使用的创意剧本包。
+
+    后端仍保留 brief/style/narrative 三个内部产物，但对前端只暴露一个
+    confirm_narrative 决策：确认创意剧本包后直接进入关键帧生成。
+    """
+    req_id = get_request_id(request)
+    user_id = str(current_user.id)
+
+    await _cancel_open_decisions(
+        project_id,
+        {"confirm_brief", "confirm_narrative", "confirm_storyboard"},
+    )
+
+    async with UnitOfWork() as uow:
+        await event_log_service.emit(
+            uow.session,
+            ProjectEvent(
+                project_id=project_id,
+                aggregate_type="project",
+                aggregate_id=project_id,
+                event_type="creative_package.generating",
+                category="workflow",
+                payload={"message": "正在生成创意方案和三镜头脚本，请稍候..."},
+            ),
+        )
+
+    brief_svc = BriefPersistenceService()
+    try:
+        brief_version, style_version = await brief_svc.generate_and_save(
+            project_id=project_id,
+            user_id=user_id,
+            style_direction="",
+        )
+    except BriefGenerationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": exc.code, "message": exc.message},
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"code": "creative_package_brief_failed", "message": str(exc)},
+        ) from exc
+
+    narrative_svc = NarrativeScriptService()
+    try:
+        narrative = await narrative_svc.generate_and_save(
+            project_id=project_id,
+            user_id=user_id,
+        )
+    except NarrativeScriptError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": exc.code, "message": exc.message},
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"code": "creative_package_narrative_failed", "message": str(exc)},
+        ) from exc
+
+    await _cancel_open_decisions(
+        project_id,
+        {"confirm_brief", "confirm_narrative"},
+    )
+    decision = await _create_project_decision(
+        project_id=project_id,
+        user_id=user_id,
+        decision_type="confirm_narrative",
+        target_entity_id=narrative.id,
+        options_payload=[
+            {"id": "confirm", "title": "确认创意剧本包并生成关键帧"},
+            {"id": "regenerate", "title": "重新生成创意剧本包"},
+        ],
+    )
+
+    try:
+        await director_report_service.trigger(
+            project_id=project_id,
+            task_type="generate_narrative",
+            task_result={
+                "version_no": narrative.version_no,
+                "character_count": len(narrative.raw_payload.get("characters") or []) if narrative.raw_payload else 0,
+                "scene_count": len(narrative.raw_payload.get("scenes") or []) if narrative.raw_payload else 0,
+                "section_count": len(narrative.raw_payload.get("sections") or []) if narrative.raw_payload else 0,
+            }
+        )
+    except Exception:
+        pass
+
+    return ok(
+        data={
+            "brief_version_id": brief_version.id,
+            "style_version_id": style_version.id,
+            "narrative_version_id": narrative.id,
+            "brief_version_no": brief_version.version_no,
+            "narrative_version_no": narrative.version_no,
+            "decision_id": decision["id"],
+            "message": "创意剧本包已生成，请确认后开始生成关键帧。",
         },
         request_id=req_id,
     )
@@ -497,9 +679,16 @@ async def trigger_generate_storyboard(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={"code": "project_not_found", "message": "项目不存在"},
         )
-    if project.current_stage == "narrative_ready":
+    if project.current_stage in {"narrative_ready", "shot_plan_ready"}:
+        async with UnitOfWork() as uow:
+            narrative = await NarrativeScriptVersionRepository(uow.session).get_active(
+                project_id
+            )
         await _require_selected_decision(
-            project_id, "confirm_narrative", req_id
+            project_id,
+            "confirm_narrative",
+            req_id,
+            getattr(narrative, "id", None),
         )
 
     try:
@@ -540,9 +729,8 @@ async def trigger_generate_clips(
 ) -> dict:
     """触发视频 clip 生成（REST Worker dispatch 版本）。
 
-    新九宫格流程下，storyboard_ready 即表示分镜已生成完成并可进入视频生成。
-    因此前端允许直接从 storyboard_ready 触发 clip 生成，不再强依赖
-    confirm_storyboard 决策；若 Director 额外创建了确认卡，仍可通过该卡进入。
+    新 UI 下 storyboard_ready 表示关键帧已生成完成，但仍必须先选择
+    confirm_storyboard，避免高成本视频生成被直接触发。
     """
     req_id = get_request_id(request)
     _logger.info(
@@ -554,8 +742,6 @@ async def trigger_generate_clips(
         event_type="generate_clips_credits_bypass_mode",
     )
 
-    # 前置决策校验：新流程已移除（storyboard_ready 阶段本身即已确认分镜）
-    # await _require_selected_decision(project_id, "confirm_storyboard", req_id)
     async with UnitOfWork() as uow:
         project = await ProjectRepository(uow.session).get_by_id_for_user(
             project_id, str(current_user.id)
@@ -583,6 +769,25 @@ async def trigger_generate_clips(
                         f"当前阶段 {project.current_stage!r} 还不能开始生成视频，"
                         "请先完成九宫格生成与切分，进入 storyboard_ready；若本次是视频生成阶段失败，也可在 failed 状态下重试。"
                     ),
+                },
+            )
+        storyboard = await StoryboardVersionRepository(uow.session).get_active(
+            project_id
+        )
+
+    if project.current_stage in {"storyboard_ready", "clips_ready", "failed"}:
+        selected_option = await _require_selected_decision(
+            project_id,
+            "confirm_storyboard",
+            req_id,
+            getattr(storyboard, "id", None),
+        )
+        if selected_option == "regenerate":
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code": "decision_required",
+                    "message": "用户选择了重新生成关键帧，请先重新生成关键帧后再触发视频生成。",
                 },
             )
 

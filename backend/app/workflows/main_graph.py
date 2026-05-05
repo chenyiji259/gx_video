@@ -595,6 +595,21 @@ async def _execute_director_mode_b(
     agent: DirectorAgent,
     intent_svc: IntentResolutionService,
 ) -> dict:
+    system_trigger: dict = state.get("system_trigger") or {}
+    if system_trigger.get("task_type") == "generate_clips":
+        trigger_result = system_trigger.get("result") or {}
+        clip_count = int(trigger_result.get("clip_count") or 0)
+        project_stage = trigger_result.get("project_stage") or ""
+        if clip_count <= 0 or project_stage == "failed":
+            return {
+                "assistant_message": "视频生成阶段失败：没有生成出可用视频片段。请查看失败镜头原因后重试视频生成。",
+                "requires_confirmation": False,
+                "next_action": None,
+                "pending_decision_id": None,
+                "decision_options": [],
+                "error": None,
+            }
+
     report_output = await agent.run(state)
     report_result = intent_svc.resolve(report_output)
     return await _finalize_director_response(

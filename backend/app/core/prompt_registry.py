@@ -40,6 +40,7 @@ class PromptTemplate:
 
 
 _FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
+_IGNORED_PROMPT_FILE_RE = re.compile(r"(?:^|[_\-])(backup|bak|draft|tmp)(?:[_\-.]|$)", re.IGNORECASE)
 
 
 def _parse_prompt_file(path: Path) -> PromptTemplate:
@@ -110,6 +111,8 @@ class PromptRegistry:
 
         templates: dict[str, PromptTemplate] = {}
         for md_file in sorted(prompts_dir.rglob("*.md")):
+            if _IGNORED_PROMPT_FILE_RE.search(md_file.stem):
+                continue
             tmpl = _parse_prompt_file(md_file)
             if tmpl.name in templates:
                 raise ValueError(

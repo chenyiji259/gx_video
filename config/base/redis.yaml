@@ -2,11 +2,19 @@
 
 redis:
   # 当前使用的 Redis 配置：
+  # - local_windows: 本机 Windows Redis 服务（当前本地开发使用）
   # - existing_remote: 原有远程 Redis，后续需要时可切回
   # - server_docker: 服务器 Docker 容器 redis_video（当前本地代码远程连接）
-  active_profile: existing_remote
+  active_profile: local_windows
 
   profiles:
+    local_windows:
+      host: 127.0.0.1
+      port: 6379
+      # 本机 Redis 默认未设置密码
+      password: ""
+      db: 0
+
     existing_remote:
       host: 8.134.170.191
       port: 6379

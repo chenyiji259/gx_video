@@ -21,6 +21,7 @@ from pydantic import BaseModel
 
 from app.api.v1.deps import get_current_user, get_request_id, ok
 from app.models.user import User
+from app.repositories.event_log_repository import EventLogRepository
 from app.repositories.planning_repositories import ShotRepository
 from app.repositories.project_repository import ProjectRepository
 from app.repositories.unit_of_work import UnitOfWork
@@ -98,6 +99,29 @@ def _shot_to_dict(shot: object) -> dict:
     }
 
 
+def _build_latest_failure_map(events: list[object]) -> dict[str, dict[str, Any]]:
+    """从 clip.shot.failed 事件中提取每个 shot 最近一次失败原因。"""
+    failure_map: dict[str, dict[str, Any]] = {}
+    for event in events:
+        payload = getattr(event, "payload", {}) or {}
+        shot_id = payload.get("shot_id")
+        if not shot_id or shot_id in failure_map:
+            continue
+        failure = payload.get("failure") or {}
+        failure_map[str(shot_id)] = {
+            "code": failure.get("code") or "unknown_error",
+            "message": failure.get("message") or payload.get("message") or "视频生成失败，但未返回具体错误。",
+            "provider": failure.get("provider"),
+            "event_id": getattr(event, "id", None),
+            "created_at": (
+                getattr(event, "created_at", None).isoformat()
+                if getattr(event, "created_at", None)
+                else None
+            ),
+        }
+    return failure_map
+
+
 @router.get("/projects/{project_id}/shots")
 async def list_shots(
     project_id: str,
@@ -126,10 +150,24 @@ async def list_shots(
             offset=offset,
         )
         total = await shot_repo.count_by_project(project_id)
+        failure_events = await EventLogRepository(
+            uow.session
+        ).list_project_events_by_type(
+            project_id,
+            "clip.shot.failed",
+            limit=200,
+        )
+        latest_failure_by_shot = _build_latest_failure_map(list(failure_events))
 
     return ok(
         data={
-            "items": [_shot_to_dict(s) for s in shots],
+            "items": [
+                {
+                    **_shot_to_dict(s),
+                    "last_failure": latest_failure_by_shot.get(getattr(s, "id", "")),
+                }
+                for s in shots
+            ],
             "total": total,
             "limit": limit,
             "offset": offset,

@@ -669,7 +669,8 @@ CREATE TABLE IF NOT EXISTS clip_versions (
         REFERENCES prompt_bundles (id) ON DELETE SET NULL,
     CONSTRAINT ck_clip_versions_mode CHECK (
         generation_mode IN (
-            'image_to_video', 'text_to_video', 'video_to_video', 'lipsync'
+            'image_to_video', 'text_to_video', 'video_to_video',
+            'multi_image_fusion', 'lipsync'
         )
     ),
     CONSTRAINT ck_clip_versions_status CHECK (

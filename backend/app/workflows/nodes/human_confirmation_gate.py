@@ -45,8 +45,8 @@ _DEFAULT_OPTIONS: dict[str, list[dict]] = {
         {"id": "regenerate",  "title": "重新生成创意方案"},
     ],
     "confirm_narrative": [
-        {"id": "confirm",     "title": "确认叙事剧本并继续"},
-        {"id": "regenerate",  "title": "重新生成叙事剧本"},
+        {"id": "confirm",     "title": "确认创意剧本包并生成关键帧"},
+        {"id": "regenerate",  "title": "重新生成创意剧本包"},
     ],
     "confirm_visual_bible": [
         {"id": "confirm",     "title": "确认视觉方向并继续"},
@@ -57,8 +57,8 @@ _DEFAULT_OPTIONS: dict[str, list[dict]] = {
         {"id": "regenerate",  "title": "重新生成镜头计划"},
     ],
     "confirm_storyboard": [
-        {"id": "confirm",     "title": "确认分镜图并开始生成视频片段"},
-        {"id": "regenerate",  "title": "重新生成分镜图"},
+        {"id": "confirm",     "title": "确认关键帧并开始生成视频"},
+        {"id": "regenerate",  "title": "重新生成关键帧"},
     ],
 }
 
@@ -82,7 +82,7 @@ _USER_MESSAGES: dict[str, str] = {
         "创意方案已生成，请查看并确认，或选择重新生成："
     ),
     "confirm_narrative": (
-        "叙事剧本已生成，请查看并确认，或选择重新生成："
+        "创意剧本包已生成，请查看并确认，或选择重新生成："
     ),
     "confirm_visual_bible": (
         "视觉圣经已生成，请确认当前角色/场景方向，或选择重新生成："
@@ -91,7 +91,7 @@ _USER_MESSAGES: dict[str, str] = {
         "镜头计划已生成，请确认后开始生成分镜图："
     ),
     "confirm_storyboard": (
-        "分镜图已生成，请确认后开始生成视频片段（高成本操作，请确认预计消耗 credits）："
+        "关键帧画面已生成，请确认后开始生成视频片段（高成本操作，请确认预计消耗 credits）："
     ),
 }
 

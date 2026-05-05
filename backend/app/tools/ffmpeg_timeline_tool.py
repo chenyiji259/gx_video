@@ -77,6 +77,7 @@ class FFmpegTimelineTool:
         output_path: Path,
         *,
         audio_start_sec: float = 0.0,
+        target_aspect_ratio: str | None = None,
     ) -> Path:
         """拼接 clips，必要时叠加外部音频，输出 preview 视频。
 
@@ -85,6 +86,7 @@ class FFmpegTimelineTool:
             audio_path:       原始音频文件路径（可为空；为空时保留 clip 自带音轨）。
             output_path:      输出文件路径（.mp4）。
             audio_start_sec:  音频起始偏移（秒）。
+            target_aspect_ratio: 项目目标画幅，用于多 clip 拼接前统一视频参数。
 
         Returns:
             output_path（写入成功后）。
@@ -125,7 +127,7 @@ class FFmpegTimelineTool:
         else:
             # 多 clip：先拼接；若有外部音频再叠加，否则保留原视频音轨。
             result = await self._concat_and_mix(
-                ffmpeg_bin, clip_paths, audio_path, output_path, audio_start_sec
+                ffmpeg_bin, clip_paths, audio_path, output_path, audio_start_sec, target_aspect_ratio
             )
             _logger.info(
                 f"时间线合成完成（多clip模式）: clips={len(clip_paths)}",
@@ -202,17 +204,27 @@ class FFmpegTimelineTool:
         audio_path: Path | None,
         output_path: Path,
         audio_start_sec: float,
+        target_aspect_ratio: str | None,
     ) -> Path:
         """多 clip 时对画面做顺序拼接，对音频做轻量 crossfade + loudnorm，可选 bgm ducking。"""
         crossfade_sec = 0.12
         overlap_total = max(0.0, crossfade_sec * max(len(clip_paths) - 1, 0))
+        target_width, target_height = self._resolve_target_size(target_aspect_ratio)
         input_args: list[str] = []
         for clip_path in clip_paths:
             input_args.extend(["-i", str(clip_path)])
         if audio_path:
             input_args.extend(["-i", str(audio_path)])
 
-        video_prep = "".join(f"[{idx}:v]setpts=PTS-STARTPTS[v{idx}];" for idx in range(len(clip_paths)))
+        video_prep = "".join(
+            (
+                f"[{idx}:v]setpts=PTS-STARTPTS,"
+                f"scale={target_width}:{target_height}:force_original_aspect_ratio=decrease,"
+                f"pad={target_width}:{target_height}:(ow-iw)/2:(oh-ih)/2,"
+                f"setsar=1,fps=24,format=yuv420p[v{idx}];"
+            )
+            for idx in range(len(clip_paths))
+        )
         video_concat_inputs = "".join(f"[v{idx}]" for idx in range(len(clip_paths)))
         video_chain = f"{video_concat_inputs}concat=n={len(clip_paths)}:v=1:a=0[vcat];"
 
@@ -260,10 +272,22 @@ class FFmpegTimelineTool:
         ]
         await self._run_ffmpeg(cmd, "concat_mix")
         _logger.debug(
-            f"时间线音频处理完成: clips={len(clip_paths)} overlap={overlap_total:.3f}s",
+            f"时间线音频处理完成: clips={len(clip_paths)} overlap={overlap_total:.3f}s "
+            f"target={target_width}x{target_height}",
             event_type="timeline_audio_postprocess_done",
         )
         return output_path
+
+    @staticmethod
+    def _resolve_target_size(aspect_ratio: str | None) -> tuple[int, int]:
+        """返回 timeline preview 的统一画幅尺寸，保证 concat 输入参数一致。"""
+        ratio = (aspect_ratio or "").strip()
+        if ratio == "16:9":
+            return 1920, 1080
+        if ratio == "1:1":
+            return 1080, 1080
+        # 短视频默认竖版；未知比例也使用竖版，避免不同尺寸 clip 直接 concat 失败。
+        return 1080, 1920
 
     # ------------------------------------------------------------------
     # 转码到目标分辨率（供 ExportService 使用）

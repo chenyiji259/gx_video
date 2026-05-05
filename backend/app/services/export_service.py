@@ -22,6 +22,7 @@ from app.models.export import ExportVersion
 from app.repositories.asset_repository import AssetRepository
 from app.repositories.export_repository import ExportRepository
 from app.repositories.project_repository import ProjectRepository
+from app.repositories.project_spec_repository import ProjectSpecRepository
 from app.repositories.timeline_repository import TimelineVersionRepository
 from app.repositories.unit_of_work import UnitOfWork
 from app.services.state_transition_service import state_transition_service
@@ -38,12 +39,23 @@ from app.utils.ids import generate_ulid
 ExportResolution = Literal["720p", "1080p", "2K", "4K"]
 
 # 分辨率对应 ffmpeg scale 参数
-_RESOLUTION_MAP: dict[str, str] = {
-    "720p": "1280:720",
-    "1080p": "1920:1080",
-    "2K": "2560:1440",
-    "4K": "3840:2160",
+_RESOLUTION_LONG_SIDE: dict[str, int] = {
+    "720p": 1280,
+    "1080p": 1920,
+    "2K": 2560,
+    "4K": 3840,
 }
+
+
+def _resolve_export_scale(resolution: str, aspect_ratio: str | None) -> str:
+    long_side = _RESOLUTION_LONG_SIDE.get(resolution, 1280)
+    short_side = long_side * 9 // 16
+    ratio = (aspect_ratio or "").strip()
+    if ratio == "9:16":
+        return f"{short_side}:{long_side}"
+    if ratio == "1:1":
+        return f"{short_side}:{short_side}"
+    return f"{long_side}:{short_side}"
 
 
 class ExportError(Exception):
@@ -123,6 +135,8 @@ class ExportService:
                 raise ExportError(
                     "timeline preview asset 不存在", code="preview_asset_missing"
                 )
+            spec = await ProjectSpecRepository(session).get_active(project_id)
+            aspect_ratio = (spec.output_config or {}).get("aspect_ratio") if spec else None
 
         # ---- 步骤 2: 准备本地 preview 文件 ----------------------------------------
         store = LocalArtifactStore(project_id)
@@ -137,7 +151,7 @@ class ExportService:
         output_path = export_dir / output_filename
 
         # ---- 步骤 3: ffmpeg 转码到目标分辨率 ----------------------------------------
-        scale = _RESOLUTION_MAP.get(resolution, "1280:720")
+        scale = _resolve_export_scale(resolution, aspect_ratio)
         try:
             await self._ffmpeg.transcode_to_resolution(preview_path, output_path, scale)
         except TimelineCompositionError as exc:

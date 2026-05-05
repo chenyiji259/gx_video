@@ -109,6 +109,25 @@ async def _handle_generate_storyboard(job: ToolJob) -> dict:
         f"frame_count={version.raw_payload.get('frame_count', 0)}",
         event_type="storyboard_handler_done",
     )
+    from app.services.conversation_service import ConversationService  # noqa: PLC0415
+    from app.services.decision_service import DecisionService  # noqa: PLC0415
+
+    session = await ConversationService().get_or_create_session(
+        project_id=project_id,
+        user_id=user_id,
+    )
+    await DecisionService().create_decision(
+        project_id=project_id,
+        session_id=session["id"],
+        decision_type="confirm_storyboard",
+        target_entity_type="project",
+        target_entity_id=version.id,
+        options_payload=[
+            {"id": "confirm", "title": "确认关键帧并开始生成视频"},
+            {"id": "regenerate", "title": "重新生成关键帧"},
+        ],
+        default_option_id="confirm",
+    )
     return {
         "storyboard_version_id": version.id,
         "version_no": version.version_no,
@@ -136,7 +155,19 @@ async def _handle_generate_clips(job: ToolJob) -> dict:
         f"generate_clips handler 完成: count={len(clip_versions)}",
         event_type="clips_handler_done",
     )
-    return {"clip_count": len(clip_versions)}
+    from app.repositories.project_repository import ProjectRepository  # noqa: PLC0415
+    from app.repositories.unit_of_work import UnitOfWork  # noqa: PLC0415
+
+    current_stage = ""
+    async with UnitOfWork() as uow:
+        project = await ProjectRepository(uow.session).get_by_id(project_id)
+        current_stage = project.current_stage if project is not None else ""
+
+    return {
+        "clip_count": len(clip_versions),
+        "succeeded": len(clip_versions),
+        "project_stage": current_stage,
+    }
 
 
 async def _handle_generate_timeline(job: ToolJob) -> dict:

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Plus, Trash2, Video, LogOut } from 'lucide-react';
+import { Plus, Trash2, Video, LogOut, X } from 'lucide-react';
 import { ViewState, Project } from '../types';
 import { clearToken, projectApi } from '../api';
 
@@ -12,6 +12,8 @@ export default function ProjectBoard({ onNavigate, onOpenProject }: ProjectBoard
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
+  const [showCreateDialog, setShowCreateDialog] = useState(false);
+  const [projectName, setProjectName] = useState('');
   const [error, setError] = useState<string | null>(null);
 
   React.useEffect(() => {
@@ -42,14 +44,26 @@ export default function ProjectBoard({ onNavigate, onOpenProject }: ProjectBoard
     }
   };
 
-  const currentDateTime = new Date().toISOString().slice(0, 16).replace('T', ' ');
+  const openCreateDialog = () => {
+    setProjectName('');
+    setError(null);
+    setShowCreateDialog(true);
+  };
 
   const handleCreate = async () => {
+    const name = projectName.trim();
+    if (!name) {
+      setError('请输入项目名称');
+      return;
+    }
+
     setCreating(true);
     setError(null);
     try {
-      const newProject = await projectApi.createProject(`新项目 - ${currentDateTime}`);
+      const newProject = await projectApi.createProject(name);
       setProjects([newProject, ...projects]);
+      setShowCreateDialog(false);
+      setProjectName('');
       onOpenProject(newProject.id);
     } catch (err) {
       setError(err instanceof Error ? err.message : '创建项目失败');
@@ -92,7 +106,7 @@ export default function ProjectBoard({ onNavigate, onOpenProject }: ProjectBoard
             <p className="text-gray-500 text-sm mt-1">管理你的所有 AI 生成视频项目</p>
           </div>
           <button 
-            onClick={handleCreate}
+            onClick={openCreateDialog}
             disabled={creating}
             className="flex items-center gap-2 bg-violet-600 hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-60 text-white px-5 py-2.5 rounded-xl transition-all shadow-lg shadow-violet-200 font-medium"
           >
@@ -117,7 +131,7 @@ export default function ProjectBoard({ onNavigate, onOpenProject }: ProjectBoard
             <h3 className="text-lg font-medium text-gray-900 mb-1">还没有项目</h3>
             <p className="text-gray-500 text-sm mb-6">点击右上角"新建项目"开始你的第一个视频创作</p>
             <button 
-              onClick={handleCreate}
+              onClick={openCreateDialog}
               className="bg-violet-50 text-violet-600 hover:bg-violet-100 px-5 py-2 rounded-lg font-medium transition-colors"
             >
               立刻创建
@@ -164,6 +178,56 @@ export default function ProjectBoard({ onNavigate, onOpenProject }: ProjectBoard
           </div>
         )}
       </main>
+
+      {showCreateDialog ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-gray-900/35 px-4">
+          <div className="w-full max-w-md rounded-2xl bg-white border border-gray-100 shadow-2xl shadow-gray-900/20 p-5">
+            <div className="flex items-start justify-between gap-4 mb-5">
+              <div>
+                <h2 className="text-lg font-bold text-gray-900">新建项目</h2>
+                <p className="text-sm text-gray-500 mt-1">先给项目命名，后续工作台会围绕这个项目继续创作。</p>
+              </div>
+              <button
+                onClick={() => setShowCreateDialog(false)}
+                className="text-gray-400 hover:text-gray-700 transition-colors p-1"
+                aria-label="关闭"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <label className="block text-xs font-medium text-gray-600 mb-2">项目名称</label>
+            <input
+              autoFocus
+              value={projectName}
+              onChange={(e) => setProjectName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void handleCreate();
+              }}
+              className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm text-gray-800 outline-none focus:border-violet-400 focus:ring-4 focus:ring-violet-100"
+              placeholder="例如：麦角硫因 15 秒种草广告"
+              maxLength={80}
+            />
+            <div className="text-right text-[11px] text-gray-400 mt-1">{projectName.trim().length}/80</div>
+
+            <div className="flex justify-end gap-3 mt-6">
+              <button
+                onClick={() => setShowCreateDialog(false)}
+                className="px-4 py-2 rounded-xl border border-gray-200 text-sm text-gray-600 hover:bg-gray-50 transition-colors"
+              >
+                取消
+              </button>
+              <button
+                onClick={() => void handleCreate()}
+                disabled={creating || !projectName.trim()}
+                className="px-4 py-2 rounded-xl bg-violet-600 hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-60 text-sm text-white font-medium transition-colors"
+              >
+                {creating ? '创建中...' : '创建并进入'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

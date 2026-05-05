@@ -231,11 +231,12 @@ class ClipService:
         # ---- 步骤 2: 3 并发处理 shots ----------------------------------------
         clip_versions: list[ClipVersion] = []
         clip_metadata: list[dict[str, Any]] = []
+        failure_metadata: list[dict[str, Any]] = []
         _MAX_CONCURRENT_CLIPS = 3  # 单用户并发上限
 
         semaphore = asyncio.Semaphore(_MAX_CONCURRENT_CLIPS)
 
-        async def _process_with_sem(shot: Any) -> tuple[ClipVersion | None, float]:
+        async def _process_with_sem(shot: Any) -> tuple[ClipVersion | None, float, dict[str, Any] | None]:
             async with semaphore:
                 t0 = time.monotonic()
                 # 推送 clip.shot.started SSE
@@ -260,7 +261,7 @@ class ClipService:
                         f"SSE clip.shot.started 发送失败: {exc}",
                         event_type="sse_emit_failed",
                     )
-                clip = await self._process_single_shot(
+                clip, failure = await self._process_single_shot(
                     shot=shot,
                     project_id=project_id,
                     reference_image_urls=shot_frame_urls_map.get(shot.id, []),
@@ -284,6 +285,10 @@ class ClipService:
                                     payload={
                                         "shot_id": shot.id,
                                         "shot_index": shot.shot_index,
+                                        "failure": failure or {
+                                            "code": "unknown_error",
+                                            "message": "视频生成失败，但未返回具体错误。",
+                                        },
                                     },
                                 ),
                             )
@@ -293,7 +298,7 @@ class ClipService:
                             event_type="sse_emit_failed",
                         )
 
-                return clip, elapsed
+                return clip, elapsed, failure
 
         # 并发分发所有 shots，Semaphore 限制同时进行的数量为 3
         results = await asyncio.gather(
@@ -309,7 +314,7 @@ class ClipService:
                     event_type="clip_shot_concurrent_error",
                 )
                 continue
-            clip, elapsed = result
+            clip, elapsed, failure = result
             if clip is not None:
                 clip_versions.append(clip)
                 clip_metadata.append({
@@ -320,6 +325,14 @@ class ClipService:
                     "duration_ms": clip.duration_ms,
                     "generation_time_sec": elapsed,
                 })
+            elif failure is not None:
+                failure_metadata.append({
+                    "shot_id": shot.id,
+                    "shot_index": shot.shot_index,
+                    "status": "failed",
+                    "failure": failure,
+                    "generation_time_sec": elapsed,
+                })
 
         total_shots = len(shots_to_process)
         failed_shot_count = total_shots - len(clip_versions)
@@ -328,6 +341,7 @@ class ClipService:
         await self._advance_project(
             project_id,
             clip_metadata,
+            failure_metadata=failure_metadata,
             total_shots=total_shots,
             failed_shot_count=failed_shot_count,
             logger=logger,
@@ -348,6 +362,7 @@ class ClipService:
                             "total": total_shots,
                             "succeeded": len(clip_versions),
                             "failed": failed_shot_count,
+                            "failures": failure_metadata,
                         },
                     ),
                 )
@@ -375,7 +390,7 @@ class ClipService:
         reference_image_urls: list[str],
         frame_descriptions: dict[str, str | None],
         logger: Any,
-    ) -> ClipVersion | None:
+    ) -> tuple[ClipVersion | None, dict[str, Any] | None]:
         """处理单个 shot：编译 video prompt → 生成 clip → 写 clip_versions。"""
         shot_id = shot.id
         shot_index = shot.shot_index
@@ -480,9 +495,14 @@ class ClipService:
             except Exception:  # noqa: BLE001
                 pass  # SSE 失败不阻断主流程
 
-            return clip
+            return clip, None
 
         except (PromptCompilerError, VideoGenerationError) as exc:
+            failure = {
+                "code": getattr(exc, "code", type(exc).__name__),
+                "message": getattr(exc, "message", str(exc)),
+                "provider": "prompt_compiler" if isinstance(exc, PromptCompilerError) else "video_provider",
+            }
             logger.warning(
                 f"shot[{shot_index}] clip 生成失败（跳过）: {exc}",
                 event_type="clip_shot_failed",
@@ -495,14 +515,19 @@ class ClipService:
                         uow_fail.session.add(s)
             except Exception:
                 pass
-            return None
+            return None, failure
 
         except Exception as exc:
+            failure = {
+                "code": type(exc).__name__,
+                "message": str(exc),
+                "provider": "internal",
+            }
             logger.warning(
                 f"shot[{shot_index}] clip 意外错误（跳过）: {exc}",
                 event_type="clip_shot_unexpected",
             )
-            return None
+            return None, failure
 
     # ------------------------------------------------------------------
     # 辅助：无锁估算 shots 数量（16-02）
@@ -537,6 +562,7 @@ class ClipService:
         project_id: str,
         clip_metadata: list[dict[str, Any]],
         *,
+        failure_metadata: list[dict[str, Any]],
         total_shots: int,
         failed_shot_count: int,
         logger: Any,
@@ -547,7 +573,7 @@ class ClipService:
           - 全部成功 → clips_ready
           - 任意失败 → failed（允许后续整阶段重试）
         """
-        succeeded_count = len(clip_metadata)
+        succeeded_count = total_shots - failed_shot_count
         stage_failed = failed_shot_count > 0
 
         async with UnitOfWork() as uow:
@@ -572,6 +598,7 @@ class ClipService:
                                 "total": total_shots,
                                 "succeeded": succeeded_count,
                                 "failed": failed_shot_count,
+                                "failures": failure_metadata,
                                 "retry_action": "generate_clips",
                                 "message": (
                                     "视频生成阶段失败：部分镜头生成失败。"
@@ -592,6 +619,7 @@ class ClipService:
                 "failed_shot_count": failed_shot_count,
                 "stage_failed": stage_failed,
                 "clips": clip_metadata,
+                "failures": failure_metadata,
             },
         )
 

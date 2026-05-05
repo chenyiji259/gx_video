@@ -151,7 +151,9 @@ class TimelineComposerService:
             spec = await ProjectSpecRepository(session).get_active(project_id)
             audio_asset = None
             audio_start_sec = 0.0
+            target_aspect_ratio = None
             if spec is not None and spec.audio_asset_id:
+                target_aspect_ratio = (spec.output_config or {}).get("aspect_ratio")
                 audio_asset = await asset_repo.get_by_id(spec.audio_asset_id)
                 if audio_asset is None:
                     raise TimelineError("音频 asset 不存在", code="audio_asset_missing")
@@ -161,6 +163,8 @@ class TimelineComposerService:
                     event_type="timeline_audio_mode_external",
                 )
             else:
+                if spec is not None:
+                    target_aspect_ratio = (spec.output_config or {}).get("aspect_ratio")
                 logger.info(
                     "时间线合成未检测到外部音频，改为使用 clip 自带音轨拼接",
                     event_type="timeline_audio_mode_embedded",
@@ -212,6 +216,7 @@ class TimelineComposerService:
                 audio_path=audio_path,
                 output_path=output_path,
                 audio_start_sec=audio_start_sec,
+                target_aspect_ratio=target_aspect_ratio,
             )
         except FFmpegNotAvailableError:
             raise  # 直接向上传递，不降级

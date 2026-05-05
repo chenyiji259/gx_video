@@ -36,6 +36,26 @@ class EventLogRepository(BaseRepository[EventLog]):
         self._session.add(event)
         return event
 
+    async def list_project_events_by_type(
+        self,
+        project_id: str,
+        event_type: str,
+        *,
+        limit: int = 200,
+    ) -> Sequence[EventLog]:
+        """按项目和事件类型读取最近事件，供前端状态恢复使用。"""
+        stmt = (
+            select(EventLog)
+            .where(
+                EventLog.project_id == project_id,
+                EventLog.event_type == event_type,
+            )
+            .order_by(EventLog.created_at.desc())
+            .limit(limit)
+        )
+        result = await self._session.execute(stmt)
+        return result.scalars().all()
+
 
 class OutboxRepository(BaseRepository[OutboxEvent]):
     """Outbox 事件 Repository。

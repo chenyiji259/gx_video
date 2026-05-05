@@ -67,6 +67,39 @@ export interface StyleBible {
   reference_notes?: string | null;
 }
 
+export interface NarrativeShot {
+  shot_index?: number;
+  start_ms?: number;
+  end_ms?: number;
+  duration_sec?: number;
+  duration_ms?: number;
+  subject?: string | null;
+  location?: string | null;
+  dialogue?: string | null;
+  lyric_text?: string | null;
+  scene_description?: string | null;
+  visual_description?: string | null;
+  action_description?: string | null;
+  start_frame_description?: string | null;
+  middle_frame_description?: string | null;
+  end_frame_description?: string | null;
+  camera_language?: string | null;
+}
+
+export interface NarrativeScript {
+  id: string;
+  version_no: number;
+  story_arc?: string | null;
+  characters?: Record<string, unknown>[] | null;
+  scenes?: Record<string, unknown>[] | null;
+  section_mapping?: Record<string, unknown>[] | null;
+  raw_payload?: {
+    shots?: NarrativeShot[];
+    story_arc?: string;
+    [key: string]: unknown;
+  } | null;
+}
+
 export interface Shot {
   id: string;
   shot_index: number;
@@ -79,6 +112,13 @@ export interface Shot {
   lyric_text?: string | null;
   camera_language?: string | null;
   status?: string | null;
+  last_failure?: {
+    code?: string | null;
+    message?: string | null;
+    provider?: string | null;
+    event_id?: string | null;
+    created_at?: string | null;
+  } | null;
 }
 
 export interface StoryboardCell {
@@ -139,15 +179,36 @@ export interface ExportRecord {
   created_at?: string | null;
 }
 
+export interface PendingDecisionOption {
+  id: string;
+  title?: string;
+  label?: string;
+  summary?: string;
+}
+
+export interface PendingDecision {
+  id: string;
+  decision_type: string;
+  target_entity_type?: string | null;
+  target_entity_id?: string | null;
+  options_payload?: PendingDecisionOption[] | null;
+  default_option_id?: string | null;
+  selected_option_id?: string | null;
+  status: string;
+  created_at?: string | null;
+}
+
 export interface WorkspaceData {
   project: Project;
   spec: ProjectSpec | null;
   brief: CreativeBrief | null;
   style: StyleBible | null;
+  narrative: NarrativeScript | null;
   shots: Shot[];
   storyboardGrids: StoryboardGrid[];
   clips: Clip[];
   timeline: Timeline | null;
   timelineSegments: TimelineSegment[];
   latestExport: ExportRecord | null;
+  decisions: PendingDecision[];
 }

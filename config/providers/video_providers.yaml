@@ -17,6 +17,7 @@ video_providers:
     endpoint: "https://ark.cn-beijing.volces.com/api/v3"
     pricing_ref: image_to_video
     generation_modes:
+      - multi_image_fusion
       - image_to_video
       - text_to_video
     capabilities:
@@ -52,6 +53,7 @@ video_providers:
     endpoint: "https://ark.cn-beijing.volces.com/api/v3"
     pricing_ref: image_to_video
     generation_modes:
+      - multi_image_fusion
       - image_to_video
       - text_to_video
     capabilities:
