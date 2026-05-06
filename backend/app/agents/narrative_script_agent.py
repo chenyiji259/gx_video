@@ -146,10 +146,19 @@ def _build_fallback_dialogues(user_prompt: str, total_shots: int) -> list[str]:
     return explainer_lines
 
 
-def _fallback_narrative_content(user_prompt: str, total_shots: int = 3) -> dict:
+def _fallback_narrative_content(user_prompt: str, task_spec: dict | None = None) -> dict:
     """规则兜底的最小叙事剧本结构（doc 21 §2.3 新流程：按 shot 划分）。"""
+    task_spec = task_spec or {}
+    total_shots = int(task_spec.get("shot_count_total") or task_spec.get("total_shots_generated") or 1)
+    total_shots = max(1, total_shots)
     fallback_dialogues = _build_fallback_dialogues(user_prompt, total_shots)
-    fallback_durations = [8] * total_shots
+    allowed = [int(item) for item in (task_spec.get("allowed_shot_durations_sec") or [4, 5, 6, 8, 10, 12, 15]) if int(item) <= 15]
+    if not allowed:
+        allowed = [4, 5, 6, 8, 10, 12, 15]
+    target = int(task_spec.get("target_duration_sec") or min(15, max(allowed)))
+    base = max(4, min(15, round(target / total_shots)))
+    duration = min(allowed, key=lambda item: (abs(item - base), item)) if allowed else min(15, base)
+    fallback_durations = [duration] * total_shots
     shots: list[dict] = []
     for i in range(total_shots):
         shots.append({
@@ -237,7 +246,7 @@ def _try_parse_json_strict(text: str) -> dict | None:
 
 # _make_fallback_output 已合并到 _fallback_narrative_content，此处保留别名以兼容旧调用
 def _make_fallback_output() -> dict:
-    return _fallback_narrative_content("")
+    return _fallback_narrative_content("", {})
 
 
 # 注：_build_brief_summary / _build_style_summary / _build_audio_summary_text
@@ -268,6 +277,8 @@ class NarrativeScriptAgent:
                 brief_ref          (dict)
                 style_ref          (dict, 可选)
                 audio_ref          (dict, 可选)
+                shot_count_total   (int, 三宫格 shot 数)
+                grid_count         (int, 三宫格张数)
                 version_no         (int, default=1)
             }
 
@@ -284,13 +295,13 @@ class NarrativeScriptAgent:
                 "LLM API key 未配置，NarrativeScriptAgent 使用规则兜底",
                 event_type="narrative_agent_no_api_key",
             )
-            return await self._fallback(project_id, user_prompt, version_no)
+            return await self._fallback(project_id, user_prompt, version_no, task_spec)
 
         try:
             system_content = self._renderer.render("narrative_script_system", variables={})
         except Exception as exc:
             _logger.warning(f"Prompt 加载失败: {exc!r}", event_type="narrative_agent_prompt_failed")
-            return await self._fallback(project_id, user_prompt, version_no)
+            return await self._fallback(project_id, user_prompt, version_no, task_spec)
 
         brief_ref = task_spec.get("brief_ref") or {}
         style_ref = task_spec.get("style_ref") or {}
@@ -298,6 +309,8 @@ class NarrativeScriptAgent:
         reference_image_count: int = int(task_spec.get("reference_image_count") or 0)
         target_duration_sec: int = int(task_spec.get("target_duration_sec") or 60)
         allowed_shot_durations_sec = task_spec.get("allowed_shot_durations_sec") or [4, 5, 6, 8, 10, 12, 15]
+        shot_count_total: int = int(task_spec.get("shot_count_total") or 1)
+        grid_count: int = int(task_spec.get("grid_count") or shot_count_total)
 
         # 参考图提示词：告知 Agent 用户上传了几张图，影响角色生成逻辑
         if reference_image_count > 0:
@@ -318,12 +331,13 @@ class NarrativeScriptAgent:
             f"风格圣经引用：{json.dumps(style_ref, ensure_ascii=False)}\n"
             f"音乐分析引用：{json.dumps(audio_ref, ensure_ascii=False)}\n\n"
             f"目标总时长：{target_duration_sec} 秒\n"
+            f"三宫格 shot 数：{shot_count_total}，三宫格张数：{grid_count}。15 秒以下为 1 个 shot；超过 15 秒按每段不超过 15 秒连续拆分。\n"
             f"允许的单 shot 时长档位：{', '.join(str(item) for item in allowed_shot_durations_sec)}\n\n"
             f"请先使用 read_artifact_tool 读取创意简报和风格圣经，尤其要读取 "
             f"creative_brief.extension.total_shots_generated、target_duration_sec、allowed_shot_durations_sec、character_list、aspect_ratio。"
             f"然后生成叙事剧本 JSON，根对象必须包含 story_arc / shots / characters / scenes。"
-            f"其中 shots 必须是逐镜头数组，数量必须等于 total_shots_generated；"
-            f"每个 shot 的 duration_sec 必须从允许档位中选择，且全部 shot 的时长总和要尽量贴近 target_duration_sec；"
+            f"其中 shots 必须是逐镜头数组，数量必须等于 {shot_count_total}；"
+            f"每个 shot 的 duration_sec 必须从允许档位中选择，且不得超过 15 秒，全部 shot 的时长总和要尽量贴近 target_duration_sec；"
             f"characters 必须来自 brief.extension.character_list，不能丢失已有角色；"
             f"scenes 必须从 shot 的场景中抽成结构化数组，不能为空；"
             f"根对象还必须包含 audio_strategy；每个 shot 还必须包含 audio_strategy。"
@@ -361,7 +375,7 @@ class NarrativeScriptAgent:
                 f"NarrativeScriptAgent 调用失败: {exc!r}，使用规则兜底",
                 event_type="narrative_agent_invoke_failed",
             )
-            return await self._fallback(project_id, user_prompt, version_no)
+            return await self._fallback(project_id, user_prompt, version_no, task_spec)
 
         ref = _extract_last_write_result(result)
         if ref:
@@ -395,11 +409,11 @@ class NarrativeScriptAgent:
                 )
 
         _logger.warning("NarrativeScriptAgent 未调用 write_artifact_tool", event_type="narrative_agent_no_tool_call")
-        return await self._fallback(project_id, user_prompt, version_no)
+        return await self._fallback(project_id, user_prompt, version_no, task_spec)
 
-    async def _fallback(self, project_id: str, user_prompt: str, version_no: int) -> dict:
+    async def _fallback(self, project_id: str, user_prompt: str, version_no: int, task_spec: dict | None = None) -> dict:
         """规则兜底：写出最小叙事剧本 ArtifactRef。"""
-        content = _fallback_narrative_content(user_prompt)
+        content = _fallback_narrative_content(user_prompt, task_spec or {})
         try:
             ref = await write_artifact(
                 content=content, project_id=project_id,

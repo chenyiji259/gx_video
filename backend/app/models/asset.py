@@ -45,7 +45,7 @@ _ASSET_TYPE_VALUES = (
     # scene_reference:     场景参考图（txt2img，doc11 §4.2）
     # prop_reference:      道具/细节参考图（可选，doc11 §4.2）
     # creative_brief / narrative_script / shot_plan 等：doc12 偏差6 统一 ArtifactRef 协议文本产物
-    # nine_grid_image:     九宫格大图（doc 21 §5.4，3072×3072 整图）
+    # nine_grid_image:     三宫格大图（兼容旧枚举名）
 )
 
 

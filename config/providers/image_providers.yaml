@@ -9,11 +9,8 @@ image_providers:
   # ========================================================================
   # GPT Image 2（ToApis 中转） - doc 21 §1.4 默认图片 provider
   # ========================================================================
-  # 九宫格主链路：按像素尺寸直传 size，并通过 metadata.resolution 标记 2K / 4K
-  # 当前默认策略：九宫格统一走 2K；尺寸由后端按项目方向映射
-  #   - 方屏：3072x3072
-  #   - 竖屏：1728x3072
-  #   - 横屏：3072x1728
+  # 三宫格主链路：ToApis size 使用官方白名单比例，固定 16:9 + 2K。
+  # 目标视频画幅由后端切分后中心裁剪到 target_cell_aspect_ratio，避免传 27:16 等非法比例。
   # 异步任务：提交 → 轮询 → 拉取 URL（详见 docs/api/HarvAI 文档）
   # API key 复用 toapis（与 grok 视频生成共用同一 key）
   - name: gpt_image_2
@@ -30,20 +27,18 @@ image_providers:
     capabilities:
       max_width: 3840
       max_height: 3840
-      # 当前主链路按像素尺寸直传，supported_sizes 仅作常用预设说明
+      # ToApis GPT Image 2 支持的合法比例子集，三宫格固定使用 16:9。
       supported_sizes:
-        - "3072x3072"
-        - "1728x3072"
-        - "3072x1728"
+        - "16:9"
       resolution: "2K"
       supports_negative_prompt: false
       supports_reference_image: true
       supports_multi_ref: true
       max_reference_images: 3
     default_params:
-      size: "3072x3072"
+      size: "16:9"
       resolution: "2K"
-      orientation: "square"
+      orientation: "landscape"
       n: 1
     prompt_style: natural
 

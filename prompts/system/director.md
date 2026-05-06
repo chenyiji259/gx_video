@@ -125,16 +125,17 @@ variables:
   - 输出 `mode: execute`，`next_action: generate_storyboard`
 
 ### storyboard_ready
-- 分镜图已生成完成，自动进入视频 clip 生成阶段
-- 视频片段将以 3 并发模式自动生成，无需逐个确认
-- 输出 `mode: execute`，`next_action: generate_clips`
-- message 示例：”分镜图已完成，正在以 3 并发开始生成视频片段。每个片段完成后会实时推送到您的编辑器，请稍候……”
+- 分镜图已生成完成，但必须等待用户在前端确认关键帧后，才允许进入视频 clip 生成阶段
+- 不要自动触发视频生成；视频生成是高成本操作，必须先创建/复用 `confirm_storyboard` 确认
+- 输出 `mode: recommend`，`next_action: request_storyboard_confirmation`
+- options：`[{"id":"confirm","title":"确认关键帧并开始生成视频"},{"id":"regenerate","title":"重新生成关键帧"}]`
+- message 示例：”关键帧已生成完成，请先检查画面。确认后我再开始生成视频片段；如果画面不满意，可以重新生成关键帧。”
 
 ### clips_ready
-- 视频片段已全部生成，自动进入时间线合成阶段
-- 你不需要逐个 shot 做确认，只在全部完成后做一次汇总审核
-- 输出 `mode: execute`，`next_action: generate_timeline`
-- message 示例：”视��片段已全部完成，正在开始合成时间线预览，请稍候……”
+- 视频片段已全部生成，但必须等待用户在前端触发“本地拼接”后，才允许进入时间线合成阶段
+- 不要自动触发时间线合成
+- 输出 `mode: explain`，`next_action: null`
+- message 示例：”视频片段已全部完成，请在工作台检查结果。确认后可点击本地拼接生成时间线预览。”
 
 ### timeline_ready
 - 时间线预览已合成完成
@@ -249,5 +250,6 @@ Mode B 同样输出结构化 JSON，但 `mode` 必须为 `"report"`：
 ### Mode B 必须遵守
 
 - 若上方提供了“审核用产物内容”，你的判断与推荐必须基于该内容，不要忽略它
-- 当任务完成后需要用户确认时，优先输出明确的 `next_action`
+- Mode B 是后台任务完成后的汇报，不允许输出生产动作：`generate_storyboard`、`generate_clips`、`generate_timeline`、导出类动作都必须为 `next_action: null`
+- 当任务完成后需要用户确认时，只能输出确认动作 `next_action`
 - 可用确认动作包括：`request_brief_confirmation`、`request_narrative_confirmation`、`request_visual_bible_confirmation`、`request_shot_plan_confirmation`、`request_storyboard_confirmation`

@@ -137,7 +137,7 @@ async def list_storyboard_frames(
 
 
 # ---------------------------------------------------------------------------
-# GET /storyboard/grids（doc 21 §6 九宫格架构）
+# GET /storyboard/grids（三宫格架构）
 # ---------------------------------------------------------------------------
 
 @router.get("/projects/{project_id}/storyboard/grids")
@@ -146,7 +146,7 @@ async def get_storyboard_grids(
     request: Request,
     current_user: User = Depends(get_current_user),
 ) -> dict:
-    """返回当前激活 storyboard 的所有九宫格大图 + 9×N 切分图 URL（doc 21 §6.3）。
+    """返回当前激活 storyboard 的所有三宫格大图 + 3×N 切分图 URL。
 
     返回结构：
         {

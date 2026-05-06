@@ -60,6 +60,16 @@ from app.workflows.graph_state import ProjectGraphState
 
 _logger = get_logger("workflows.main_graph", layer="system")
 
+_MODE_B_CONFIRM_ACTIONS: frozenset[str] = frozenset(
+    {
+        "request_brief_confirmation",
+        "request_narrative_confirmation",
+        "request_visual_bible_confirmation",
+        "request_shot_plan_confirmation",
+        "request_storyboard_confirmation",
+    }
+)
+
 # ---------------------------------------------------------------------------
 # Checkpointer 初始化（P6-04：优先 PostgresSaver，fallback MemorySaver）
 # ---------------------------------------------------------------------------
@@ -612,6 +622,9 @@ async def _execute_director_mode_b(
 
     report_output = await agent.run(state)
     report_result = intent_svc.resolve(report_output)
+    if report_result.next_action not in _MODE_B_CONFIRM_ACTIONS:
+        report_result.next_action = None
+        report_result.requires_confirmation = False
     return await _finalize_director_response(
         state=state,
         director_out=report_output,

@@ -1,19 +1,19 @@
-"""Storyboard 生成服务（doc 21 九宫格架构）。
+"""Storyboard 生成服务（1x3 三宫格架构）。
 
 来源文档：doc 21 §3 + §5 + §6
 
 职责：
-  按 brief.extension.grid_count 串行生成多张九宫格大图，每张：
-    1. 从 narrative_script 取出 9 个 cell 对应的 shot 描述
-    2. 编译九宫格 prompt（PromptCompilerService.compile_nine_grid_prompt）
-    3. 调用 ImageGenerationTool.generate_nine_grid 生成 3072×3072 大图
-    4. 调用 ImageGenerationTool.split_and_persist_grid 切分 9 张 cell
-    5. 落库 StoryboardFrame：1 条大图 + 9 条 cell（doc 21 §5.4）
+  按 brief.extension.grid_count 串行生成多张三宫格大图，每张：
+    1. 从 narrative_script 取出 3 个 cell 对应的 shot 描述
+    2. 编译三宫格 prompt（PromptCompilerService.compile_nine_grid_prompt）
+    3. 调用 ImageGenerationTool.generate_nine_grid 生成三宫格大图
+    4. 调用 ImageGenerationTool.split_and_persist_grid 切分 3 张 cell
+    5. 落库 StoryboardFrame：1 条大图 + 3 条 cell
     6. 推送 4 个事件（doc 21 §6.1）：
        storyboard.grid.generating / generated / split_done / all_grids_completed
 
 当前版本说明：
-  默认仅使用单张九宫格，不启用跨九宫格 cell 复用策略。
+  每张三宫格对应一个 shot 的起始 / 中间 / 结尾三帧。
 """
 from __future__ import annotations
 
@@ -64,11 +64,11 @@ class StoryboardGenerationError(Exception):
 
 
 # ---------------------------------------------------------------------------
-# StoryboardService（doc 21 九宫格架构）
+# StoryboardService（三宫格架构）
 # ---------------------------------------------------------------------------
 
 class StoryboardService:
-    """九宫格 storyboard 服务：brief.extension + narrative_script → N 张九宫格 + 切分 + 落库。"""
+    """三宫格 storyboard 服务：brief.extension + narrative_script → N 张三宫格 + 切分 + 落库。"""
 
     def __init__(self) -> None:
         self._compiler = PromptCompilerService()
@@ -80,7 +80,7 @@ class StoryboardService:
         project_id: str,
         user_id: str,
     ) -> StoryboardVersion:
-        """主入口：执行九宫格 storyboard 生成流程。
+        """主入口：执行三宫格 storyboard 生成流程。
 
         Args:
             project_id: 目标项目 ID
@@ -122,6 +122,7 @@ class StoryboardService:
                 ProjectStage.NARRATIVE_READY.value,    # 新流程：narrative 直接进 storyboard
                 ProjectStage.SHOT_PLAN_READY.value,    # 兼容旧流程
                 ProjectStage.STORYBOARD_READY.value,   # 允许重新生成
+                ProjectStage.FAILED.value,             # 允许分镜生成失败后手动重试
             }
             if project.current_stage not in allowed_stages:
                 raise StoryboardGenerationError(
@@ -145,6 +146,13 @@ class StoryboardService:
                     f"brief.raw_payload.extension 字段无效: {exc}",
                     code="invalid_extension",
                 ) from exc
+            if ext.storyboard_layout != "1x3_triptych" or ext.grid_count != max(1, ext.total_shots_generated):
+                ext = ext.model_copy(
+                    update={
+                        "storyboard_layout": "1x3_triptych",
+                        "grid_count": max(1, ext.total_shots_generated),
+                    }
+                )
 
             # 读取 active narrative_script（doc 21 §2.3：含每个 shot 的 frame description）
             narrative = await NarrativeScriptVersionRepository(session).get_active(
@@ -190,7 +198,7 @@ class StoryboardService:
         total_shots = ext.total_shots_generated
 
         logger.info(
-            f"九宫格 storyboard 生成开始: grid_count={grid_count} "
+            f"三宫格 storyboard 生成开始: grid_count={grid_count} "
             f"total_shots={total_shots}",
             event_type="storyboard_generation_start",
         )
@@ -233,7 +241,7 @@ class StoryboardService:
             )
 
             # 增量写回 raw_payload，保证前端在 shot_plan_ready 阶段即可读到
-            # 已完成的九宫格，而不是等全部完成后一次性出现。
+            # 已完成的三宫格，而不是等全部完成后一次性出现。
             async with UnitOfWork() as uow:
                 sv = await StoryboardVersionRepository(uow.session).get_by_id(
                     sb_version_id
@@ -277,7 +285,7 @@ class StoryboardService:
                     category="domain",
                     payload={
                         "grid_count": grid_count,
-                        "total_frames": 9 * grid_count,
+                        "total_frames": 3 * grid_count,
                         "shot_count": total_shots,
                         "storyboard_version_id": sb_version_id,
                     },
@@ -307,14 +315,14 @@ class StoryboardService:
             )
 
         logger.info(
-            f"九宫格 storyboard 生成完成: version={version_no} grids={grid_count} "
+            f"三宫格 storyboard 生成完成: version={version_no} grids={grid_count} "
             f"total_shots={total_shots}",
             event_type="storyboard_generation_done",
         )
         return storyboard_version
 
     # ------------------------------------------------------------------
-    # 单张九宫格处理（doc 21 §6 增量推送）
+    # 单张三宫格处理（doc 21 §6 增量推送）
     # ------------------------------------------------------------------
 
     async def _process_single_grid(
@@ -330,14 +338,12 @@ class StoryboardService:
         logger: Any,
         grids_meta: list[dict],
     ) -> None:
-        """处理单张九宫格：编译 prompt → 生成大图 → 切分 → 落 StoryboardFrame。"""
+        """处理单张三宫格：编译 prompt → 生成大图 → 切分 → 落 StoryboardFrame。"""
 
-        # 1. 准备 9 个 cell 对应的 shot 描述
-        # 当前版本：每一行对应 1 个 shot（起始 / 中间 / 结尾）
+        # 1. 准备 3 个 cell 对应的 shot 描述：同一个 shot 的起始 / 中间 / 结尾
         shot_descriptions: list[dict] = []
-        for cell_position in range(1, 10):
-            row_offset = (cell_position - 1) // 3
-            shot_idx = (grid_index - 1) * 3 + row_offset
+        shot_idx = grid_index - 1
+        for cell_position in range(1, 4):
             phase = ["start", "middle", "end"][(cell_position - 1) % 3]
             if shot_idx < len(narrative_shots):
                 ns = narrative_shots[shot_idx]
@@ -357,22 +363,10 @@ class StoryboardService:
                     "characters_in_shot": ns.get("characters_in_shot", []),
                     "emotion": ns.get("emotion", "neutral"),
                 })
-            else:
-                # 边界 cell（超出 total_shots）：沿用最后画面
-                last_ns = narrative_shots[-1] if narrative_shots else {}
-                shot_descriptions.append({
-                    "cell_position": cell_position,
-                    "shot_index": None,
-                    "scene_description": "（边界，沿用最后画面）",
-                    "frame_description": last_ns.get("end_frame_description", ""),
-                    "phase": phase,
-                    "characters_in_shot": [],
-                    "emotion": "neutral",
-                })
 
-        # 2. 编译九宫格 prompt + emit storyboard.grid.generating
+        # 2. 编译三宫格 prompt + emit storyboard.grid.generating
         logger.info(
-            f"grid[{grid_index}] 开始编译九宫格 prompt: cells={len(shot_descriptions)}",
+            f"grid[{grid_index}] 开始编译三宫格 prompt: cells={len(shot_descriptions)}",
             event_type="storyboard_grid_prompt_compile_start",
         )
         prompt_compile_started_at = time.monotonic()
@@ -396,12 +390,12 @@ class StoryboardService:
                         "grid_index": grid_index,
                         "total_grids": total_grids,
                         "bundle_id": bundle.bundle_id,
-                        "message": f"第 {grid_index}/{total_grids} 张九宫格生成中…",
+                        "message": f"第 {grid_index}/{total_grids} 张三宫格生成中…",
                     },
                 ),
             )
         logger.info(
-            f"grid[{grid_index}] 九宫格 prompt 编译完成: "
+            f"grid[{grid_index}] 三宫格 prompt 编译完成: "
             f"bundle_id={bundle.bundle_id!r} provider={bundle.provider!r} "
             f"elapsed={time.monotonic() - prompt_compile_started_at:.2f}s",
             event_type="storyboard_grid_prompt_compile_done",
@@ -409,7 +403,7 @@ class StoryboardService:
 
         # 3. 生成大图（不在 UoW 内，避免长时间持有 DB 连接）
         logger.info(
-            f"grid[{grid_index}] 开始请求九宫格生图 provider: "
+            f"grid[{grid_index}] 开始请求三宫格生图 provider: "
             f"provider={bundle.provider!r} size={bundle.params.get('size')!r}",
             event_type="storyboard_grid_provider_request_start",
         )
@@ -424,11 +418,11 @@ class StoryboardService:
                 event_type="storyboard_grid_failed",
             )
             raise StoryboardGenerationError(
-                f"九宫格 {grid_index} 生成失败: {exc.message}",
+                f"三宫格 {grid_index} 生成失败: {exc.message}",
                 code="grid_generation_failed",
             ) from exc
         logger.info(
-            f"grid[{grid_index}] 九宫格大图生成成功: parent_asset_id={parent_asset_id!r} "
+            f"grid[{grid_index}] 三宫格大图生成成功: parent_asset_id={parent_asset_id!r} "
             f"elapsed={time.monotonic() - image_generation_started_at:.2f}s",
             event_type="storyboard_grid_provider_request_done",
         )
@@ -454,10 +448,10 @@ class StoryboardService:
                 ),
             )
 
-        # 5. 切分 9 张 cell
+        # 5. 切分 3 张 cell
         split_started_at = time.monotonic()
         logger.info(
-            f"grid[{grid_index}] 开始切分九宫格: parent_asset_id={parent_asset_id!r}",
+            f"grid[{grid_index}] 开始切分三宫格: parent_asset_id={parent_asset_id!r}",
             event_type="storyboard_grid_split_start",
         )
         cell_asset_ids = await self._image_tool.split_and_persist_grid(
@@ -466,7 +460,7 @@ class StoryboardService:
             grid_index=grid_index,
         )
         logger.info(
-            f"grid[{grid_index}] 九宫格切分完成: cell_count={len(cell_asset_ids)} "
+            f"grid[{grid_index}] 三宫格切分完成: cell_count={len(cell_asset_ids)} "
             f"elapsed={time.monotonic() - split_started_at:.2f}s",
             event_type="storyboard_grid_split_done_local",
         )
@@ -478,7 +472,7 @@ class StoryboardService:
             cell_assets = await asset_repo.list_by_ids(cell_asset_ids)
             cell_url_map = await build_asset_access_url_map(cell_assets)
             for cell_pos, cell_aid in enumerate(cell_asset_ids, start=1):
-                shot_idx = (grid_index - 1) * 3 + ((cell_pos - 1) // 3)
+                shot_idx = grid_index - 1
                 shot_id_for_cell = shot_id_by_index.get(shot_idx)
                 narrative_meta = (
                     shot_descriptions[cell_pos - 1]
@@ -512,7 +506,7 @@ class StoryboardService:
                 ),
             )
 
-        # 7. 落 StoryboardFrame（1 条大图 + 9 条 cell）
+        # 7. 落 StoryboardFrame（1 条大图 + 3 条 cell）
         async with UnitOfWork() as uow:
             frame_repo = StoryboardFrameRepository(uow.session)
             shot_repo = ShotRepository(uow.session)
@@ -537,9 +531,9 @@ class StoryboardService:
                 grid_index=grid_index,
             ))
 
-            # 9 条 cell frame
+            # 3 条 cell frame
             for cell_pos, cell_aid in enumerate(cell_asset_ids, start=1):
-                shot_idx = (grid_index - 1) * 3 + ((cell_pos - 1) // 3)
+                shot_idx = grid_index - 1
                 shot_id_for_cell = shot_id_by_index.get(shot_idx)
                 if shot_id_for_cell:
                     ready_shot_ids.add(shot_id_for_cell)

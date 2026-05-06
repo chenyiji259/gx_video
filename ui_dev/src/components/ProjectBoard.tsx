@@ -77,18 +77,20 @@ export default function ProjectBoard({ onNavigate, onOpenProject }: ProjectBoard
       {/* Top Navbar */}
       <nav className="bg-white border-b border-gray-100 px-6 py-4 flex items-center justify-between sticky top-0 z-10">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 bg-gradient-to-br from-violet-500 to-indigo-600 rounded-xl flex items-center justify-center">
-            <Video className="w-5 h-5 text-white" />
+          <div className="w-10 h-10 bg-gray-950 rounded-xl flex items-center justify-center">
+            <span className="text-sm font-bold text-white">光</span>
           </div>
-          <span className="font-bold text-xl text-gray-900 tracking-tight">工作台</span>
+          <span className="font-bold text-xl text-gray-900 tracking-tight">光希内容创作平台</span>
         </div>
         <div className="flex items-center gap-4">
-          <div className="w-10 h-10 rounded-full bg-gray-100 overflow-hidden border border-gray-200">
-            <img src="https://images.unsplash.com/photo-1534528741775-53994a69daeb?ixlib=rb-4.0.3&auto=format&fit=crop&w=150&q=60" alt="Avatar" className="w-full h-full object-cover" />
+          <div className="w-10 h-10 rounded-full bg-gray-100 border border-gray-200 flex items-center justify-center text-xs font-semibold text-gray-700">
+            光希
           </div>
           <button
             onClick={() => {
               clearToken();
+              localStorage.removeItem('guangxi_last_view');
+              localStorage.removeItem('guangxi_last_project_id');
               onNavigate('login');
             }}
             className="text-gray-500 hover:text-gray-800 transition-colors"
@@ -103,7 +105,7 @@ export default function ProjectBoard({ onNavigate, onOpenProject }: ProjectBoard
         <div className="flex items-center justify-between mb-8">
           <div>
             <h1 className="text-2xl font-bold text-gray-900">我的项目</h1>
-            <p className="text-gray-500 text-sm mt-1">管理你的所有 AI 生成视频项目</p>
+            <p className="text-gray-500 text-sm mt-1">管理光希内容创作平台内的所有视频项目</p>
           </div>
           <button 
             onClick={openCreateDialog}
@@ -146,11 +148,27 @@ export default function ProjectBoard({ onNavigate, onOpenProject }: ProjectBoard
                 onClick={() => onOpenProject(project.id)}
               >
                 <div className="relative aspect-video bg-gray-100 overflow-hidden">
-                  <img
-                    src={project.cover_url || 'https://images.unsplash.com/photo-1544161515-4ab6ce6db874?ixlib=rb-4.0.3&auto=format&fit=crop&w=500&q=60'}
-                    alt={project.name}
-                    className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
-                  />
+                  {project.cover_url ? (
+                    <img
+                      src={project.cover_url}
+                      alt={project.name}
+                      className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+                    />
+                  ) : (
+                    <div className="h-full w-full bg-[radial-gradient(circle_at_20%_20%,rgba(16,185,129,0.16),transparent_28%),linear-gradient(135deg,#f8fafc_0%,#eef2f7_48%,#e2e8f0_100%)] px-5 py-4 flex flex-col justify-between">
+                      <div className="flex items-center justify-between">
+                        <span className="rounded-md bg-white/80 px-2 py-1 text-[11px] font-medium text-gray-600 shadow-sm ring-1 ring-gray-200/70">
+                          光希项目
+                        </span>
+                        <Video className="h-4 w-4 text-emerald-600" />
+                      </div>
+                      <div>
+                        <div className="text-xl font-bold text-gray-900 tracking-normal">光希</div>
+                        <div className="mt-1 h-1.5 w-24 rounded-full bg-emerald-500/70" />
+                        <div className="mt-2 text-xs text-gray-500">内容创作平台</div>
+                      </div>
+                    </div>
+                  )}
                   {/* Enter Overlay */}
                   <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                     <span className="bg-white/90 text-gray-900 px-4 py-2 rounded-full font-medium text-sm shadow-lg backdrop-blur-sm">

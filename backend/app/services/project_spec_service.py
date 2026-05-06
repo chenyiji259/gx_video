@@ -29,6 +29,7 @@ from app.repositories.project_repository import ProjectRepository
 from app.repositories.project_spec_repository import ProjectSpecRepository
 from app.repositories.unit_of_work import UnitOfWork
 from app.services.state_transition_service import StateTransitionService
+from app.services.output_spec_service import normalize_output_config
 from app.storage.local_artifact_store import LocalArtifactStore
 from app.storage.path_planner import ArtifactStage
 
@@ -142,7 +143,7 @@ class ProjectSpecService:
                 audio_end_sec=audio_end_sec,
                 user_prompt=user_prompt,
                 reference_image_asset_ids=_ref_ids,
-                output_config=output_config or {},
+                output_config=normalize_output_config(output_config),
                 constraints=constraints or {},
                 created_by=created_by,
                 is_active=False,

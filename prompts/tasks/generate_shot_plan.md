@@ -63,7 +63,7 @@ variables:
 
 **重要约束：**
 - `shot_index` 从 0 开始，连续整数
-- `duration_sec` 必须从当前视频模型支持的时长档位中选择，不允许随意输出任意秒数
+- `duration_sec` 必须从当前视频模型支持的时长档位中选择，不允许随意输出任意秒数，且单 shot 不得超过 15 秒
 - `start_ms` 和 `end_ms` 基于 `target_duration_sec` 按内容节奏均匀分配，所有 shot 的总时长之和必须等于 `target_duration_sec * 1000`
 - `end_ms = start_ms + duration_sec * 1000`（严格对齐，不得重叠）
 - `emotion_intensity` 根据该 shot 在整体视频叙事中的情绪位置推断

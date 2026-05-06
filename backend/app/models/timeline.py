@@ -78,12 +78,12 @@ class TimelineSegment(Base, ULIDMixin, CreatedAtMixin):
     )
     shot_id: Mapped[str] = mapped_column(
         String(26),
-        ForeignKey("shots.id", ondelete="RESTRICT"),
+        ForeignKey("shots.id", ondelete="CASCADE"),
         nullable=False,
     )
     clip_version_id: Mapped[str] = mapped_column(
         String(26),
-        ForeignKey("clip_versions.id", ondelete="RESTRICT"),
+        ForeignKey("clip_versions.id", ondelete="CASCADE"),
         nullable=False,
     )
     start_ms: Mapped[int] = mapped_column(Integer, nullable=False)

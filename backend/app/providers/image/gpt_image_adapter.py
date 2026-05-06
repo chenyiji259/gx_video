@@ -4,7 +4,8 @@
   - gpt-image-2（ToApis 中转）
 
 接入约束（当前项目主链路）：
-  - 九宫格主链路按像素尺寸直传 size，例如 3072x3072 / 1728x3072 / 3072x1728
+  - ToApis GPT Image 2 size 使用官方白名单比例；三宫格固定 16:9 + 2K。
+  - 目标视频画幅由下游切分裁剪逻辑处理，不把 27:16 等内部画布比例传给 provider。
   - metadata.resolution 走项目侧决策（当前默认 2K）
   - metadata.orientation 按 portrait / landscape / square 传入
   - 仍兼容旧的 aspect_ratio 比例模式，作为兜底
@@ -37,14 +38,21 @@ _logger = get_logger("gpt_image_adapter", layer="tool")
 _SUBMIT_PATH = "/v1/images/generations"
 _QUERY_PATH = "/v1/images/generations/{task_id}"
 
-_RATIO_TO_PIXEL_SIZE: dict[str, str] = {
-    "1:1": "3072x3072",
-    "9:16": "1728x3072",
-    "2:3": "1728x3072",
-    "3:4": "1728x3072",
-    "16:9": "3072x1728",
-    "3:2": "3072x1728",
-    "4:3": "3072x1728",
+_RATIO_TO_PROVIDER_SIZE: dict[str, str] = {
+    "1:1": "1:1",
+    "9:16": "9:16",
+    "2:3": "2:3",
+    "3:4": "3:4",
+    "16:9": "16:9",
+    "3:2": "3:2",
+    "4:3": "4:3",
+}
+
+_LEGACY_PIXEL_SIZE_TO_PROVIDER_SIZE: dict[str, str] = {
+    "1728x1024": "16:9",
+    "3072x576": "16:9",
+    "3072x1024": "16:9",
+    "2304x1024": "16:9",
 }
 
 
@@ -73,7 +81,7 @@ def _resolve_request_shape(params: dict[str, Any]) -> tuple[str, str, str]:
     """解析 GPT Image 2 请求尺寸。
 
     返回：
-      size          像素尺寸，例如 3072x3072
+      size          ToApis 白名单比例，例如 16:9
       resolution    2K / 4K / 1K
       orientation   portrait / landscape / square
     """
@@ -82,23 +90,17 @@ def _resolve_request_shape(params: dict[str, Any]) -> tuple[str, str, str]:
     requested_orientation = str(params.get("orientation") or "").strip().lower()
 
     if requested_size:
+        normalized_size = _LEGACY_PIXEL_SIZE_TO_PROVIDER_SIZE.get(requested_size.lower(), requested_size)
+        if "x" in normalized_size:
+            normalized_size = "16:9"
         if requested_orientation:
             orientation = requested_orientation
         else:
-            try:
-                w_str, h_str = requested_size.lower().split("x", 1)
-                w = int(w_str.strip())
-                h = int(h_str.strip())
-                if w == h:
-                    orientation = "square"
-                else:
-                    orientation = "landscape" if w > h else "portrait"
-            except Exception:  # noqa: BLE001
-                orientation = "square"
-        return requested_size, requested_resolution, orientation
+            orientation = "landscape"
+        return normalized_size, requested_resolution, orientation
 
     ratio_input = str(params.get("aspect_ratio") or "1:1").strip()
-    size = _RATIO_TO_PIXEL_SIZE.get(ratio_input, "3072x3072")
+    size = _RATIO_TO_PROVIDER_SIZE.get(ratio_input, "16:9")
     orientation = _classify_orientation_from_ratio(ratio_input)
     return size, requested_resolution, orientation
 
@@ -124,7 +126,7 @@ class GPTImageAdapter:
             self._default_params: dict[str, Any] = dict(self._profile.default_params)
         except (KeyError, AttributeError):
             self._profile = None
-            self._default_params = {"size": "3072x3072", "resolution": "2K", "orientation": "square", "n": 1}
+            self._default_params = {"size": "16:9", "resolution": "2K", "orientation": "landscape", "n": 1}
 
     # ------------------------------------------------------------------
     # 公共接口（ImageProviderAdapter 协议）
@@ -383,11 +385,16 @@ class GPTImageAdapter:
                 "GPT Image 2 返回图片 URL 为空", code="empty_url"
             )
 
-        try:
-            width_str, height_str = requested_size.lower().split("x", 1)
-            width, height = int(width_str.strip()), int(height_str.strip())
-        except Exception:  # noqa: BLE001
-            width, height = 3072, 3072
+        size_to_dims = {
+            "1:1": (3072, 3072),
+            "9:16": (3072, 1728),
+            "2:3": (3072, 2048),
+            "3:4": (3072, 2304),
+            "16:9": (3072, 1728),
+            "3:2": (3072, 2048),
+            "4:3": (3072, 2304),
+        }
+        width, height = size_to_dims.get(requested_size, (3072, 1728))
 
         return ImageResult(
             image_url=image_url,

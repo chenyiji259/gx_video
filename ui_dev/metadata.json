@@ -1,5 +1,5 @@
 {
-  "name": "VidMuse UI Dev",
-  "description": "VidMuse 独立前端工作台，保留当前长页面 UI 并对接本地后端真实数据。",
+  "name": "光希内容创作平台 UI Dev",
+  "description": "光希内容创作平台独立前端工作台，保留当前长页面 UI 并对接本地后端真实数据。",
   "requestFramePermissions": []
 }

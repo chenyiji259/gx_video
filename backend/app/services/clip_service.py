@@ -159,11 +159,7 @@ class ClipService:
                 and s.shot_plan_version_id == shot_plan_version_id
             ]
 
-            # 读取九宫格行级帧映射：
-            #   shot 1 = cell1 / cell2 / cell3
-            #   shot 2 = cell4 / cell5 / cell6
-            #   shot 3 = cell7 / cell8 / cell9
-            # 当前版本默认按“单张九宫格、每行 3 图融合成 1 个视频 shot”执行。
+            # 读取三宫格帧映射：每张三宫格对应 1 个 shot 的起始 / 中间 / 结尾三图。
             sb_version = await StoryboardVersionRepository(session).get_active(project_id)
             asset_repo = AssetRepository(session)
             shot_frame_urls_map: dict[str, list[str]] = {}
@@ -175,26 +171,24 @@ class ClipService:
                 desc_by_shot_index: dict[int, dict[str, str | None]] = {}
                 for grid in (sb_version.raw_payload.get("grids") or []):
                     grid_index = int(grid.get("grid_index") or 1)
-                    base_shot_index = (grid_index - 1) * 3
+                    shot_index = grid_index - 1
                     cells = sorted(
                         (grid.get("cells") or []),
                         key=lambda cell: int(cell.get("cell_position") or 0),
                     )
-                    for row in range(3):
-                        shot_index = base_shot_index + row
-                        row_cells = cells[row * 3:(row + 1) * 3]
-                        frames_by_shot_index[shot_index] = [
-                            cell.get("asset_id") for cell in row_cells
-                        ]
-                        desc_by_shot_index[shot_index] = {
-                            "start": row_cells[0].get("frame_description") if len(row_cells) > 0 else None,
-                            "middle": row_cells[1].get("frame_description") if len(row_cells) > 1 else None,
-                            "end": row_cells[2].get("frame_description") if len(row_cells) > 2 else None,
-                        }
-                        for cell in row_cells:
-                            cell_asset_id = cell.get("asset_id")
-                            if cell_asset_id:
-                                cell_asset_ids.add(cell_asset_id)
+                    shot_cells = cells[:3]
+                    frames_by_shot_index[shot_index] = [
+                        cell.get("asset_id") for cell in shot_cells
+                    ]
+                    desc_by_shot_index[shot_index] = {
+                        "start": shot_cells[0].get("frame_description") if len(shot_cells) > 0 else None,
+                        "middle": shot_cells[1].get("frame_description") if len(shot_cells) > 1 else None,
+                        "end": shot_cells[2].get("frame_description") if len(shot_cells) > 2 else None,
+                    }
+                    for cell in shot_cells:
+                        cell_asset_id = cell.get("asset_id")
+                        if cell_asset_id:
+                            cell_asset_ids.add(cell_asset_id)
 
                 assets = await asset_repo.list_by_ids(list(cell_asset_ids))
                 asset_url_map = await build_asset_access_url_map(assets)

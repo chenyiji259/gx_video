@@ -46,6 +46,10 @@ export interface ProjectSpec {
     style_preference?: string;
     human_on_camera?: boolean;
     target_duration_sec?: number;
+    video_resolution?: string;
+    image_resolution?: string;
+    image_size?: string;
+    storyboard_layout?: string;
   } | null;
 }
 

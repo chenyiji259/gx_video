@@ -29,6 +29,7 @@ from app.core.config import get_config
 from app.core.logging import get_agent_logger
 from app.core.prompt_renderer import PromptRenderer
 from app.core.provider_registry import get_provider_registry
+from app.services.output_spec_service import plan_triptych_shots
 from app.tools.shared.artifact_tools import (
     read_artifact_tool,
     write_artifact,
@@ -159,7 +160,7 @@ class CreativePlanningAgent:
                 "run_phase1 未收到有效 target_duration_sec，请检查调用方",
                 event_type="creative_planning_no_duration_p1",
             )
-        aspect = task_spec.get("aspect_ratio", "16:9")
+        aspect = task_spec.get("aspect_ratio", "9:16")
 
         # 新流程：从 spec output_config 读取额外参数
         platform = task_spec.get("platform", "")
@@ -169,6 +170,13 @@ class CreativePlanningAgent:
         allowed_shot_durations_sec = task_spec.get("allowed_shot_durations_sec") or []
         if not allowed_shot_durations_sec:
             allowed_shot_durations_sec = get_provider_registry().list_supported_durations("video", enabled_only=True) or [4, 5, 6, 8, 10, 12, 15]
+        allowed_shot_durations_sec = [int(item) for item in allowed_shot_durations_sec if int(item) <= 15]
+        if not allowed_shot_durations_sec:
+            allowed_shot_durations_sec = [4, 5, 6, 8, 10, 12, 15]
+        triptych_plan = task_spec.get("triptych_plan") or plan_triptych_shots(duration)
+        video_resolution = task_spec.get("video_resolution", "1080p")
+        image_resolution = task_spec.get("image_resolution", "2K")
+        image_size = task_spec.get("image_size") or ""
         human_on_camera_text = "未指定"
         if human_on_camera is True:
             human_on_camera_text = "是，需要真人入镜"
@@ -183,6 +191,10 @@ class CreativePlanningAgent:
             f"目标受众：{target_audience or '未指定'}\n"
             f"视觉风格偏好：{style_pref or '未指定'}\n"
             f"当前视频模型支持的单 shot 时长档位（秒）：{', '.join(str(item) for item in allowed_shot_durations_sec)}\n"
+            f"三宫格规划：storyboard_layout=1x3_triptych，shot_count={triptych_plan.get('shot_count')}，"
+            f"grid_count={triptych_plan.get('grid_count')}，每个 shot 一张三宫格，"
+            f"shot_durations_sec={triptych_plan.get('shot_durations_sec')}，单 clip 不超过 15 秒\n"
+            f"生成规格：video_resolution={video_resolution}，image_resolution={image_resolution}，image_size={image_size or '按画幅默认'}\n"
             f"真人入镜要求：{human_on_camera_text}\n\n"
             # 旧流程（音乐MV模式）：音乐分析引用已停用
             # f"音乐分析引用：{json.dumps(audio_ref, ensure_ascii=False)}\n\n"
@@ -283,6 +295,9 @@ class CreativePlanningAgent:
         allowed_shot_durations_sec = task_spec.get("allowed_shot_durations_sec") or (
             get_provider_registry().list_supported_durations("video", enabled_only=True) or [4, 5, 6, 8, 10, 12, 15]
         )
+        allowed_shot_durations_sec = [int(item) for item in allowed_shot_durations_sec if int(item) <= 15]
+        if not allowed_shot_durations_sec:
+            allowed_shot_durations_sec = [4, 5, 6, 8, 10, 12, 15]
 
         task_msg = (
             f"项目 ID：{project_id}\n目标时长：{duration}秒，最大镜头数：{max_shots}，演示镜头比例：{perf_ratio}\n\n"
@@ -362,6 +377,18 @@ class CreativePlanningAgent:
         style_dir = task_spec.get("style_direction", "待确定")
         user_prompt = task_spec.get("user_prompt", "")
         fb = self._fallback_brief(style_dir, user_prompt)
+        triptych_plan = task_spec.get("triptych_plan") or plan_triptych_shots(float(task_spec.get("target_duration_sec") or 15))
+        output_extension = fb["creative_brief"]["extension"]
+        output_extension.update(triptych_plan)
+        output_extension["target_duration_sec"] = int(triptych_plan["target_duration_sec"])
+        output_extension["aspect_ratio"] = task_spec.get("aspect_ratio", output_extension.get("aspect_ratio", "9:16"))
+        output_extension["target_platform"] = task_spec.get("platform") or None
+        output_extension["target_audience"] = task_spec.get("target_audience") or None
+        output_extension["visual_style"] = task_spec.get("style_preference") or None
+        output_extension["human_on_camera"] = bool(task_spec.get("human_on_camera")) if task_spec.get("human_on_camera") is not None else False
+        output_extension["video_resolution"] = task_spec.get("video_resolution", "1080p")
+        output_extension["image_resolution"] = task_spec.get("image_resolution", "2K")
+        output_extension["image_size"] = task_spec.get("image_size") or "16:9"
         brief_ref = await write_artifact(
             content=fb["creative_brief"], project_id=project_id,
             artifact_type="creative_brief", version_no=version_no,
@@ -386,20 +413,26 @@ class CreativePlanningAgent:
     @staticmethod
     def _fallback_brief(style_direction: str, user_prompt: str) -> dict[str, Any]:
         """LLM 不可用时的降级 brief 结构（doc 21 §1.1 含 extension 子字段）。"""
-        # 当前默认值：短视频场景收敛为 1 张九宫格 / 3 个 shot
+        # 当前默认值：短视频场景收敛为 1 张三宫格 / 1 个 shot
         fallback_extension = {
-            "target_duration_sec": 30,
-            "shot_duration_sec": 10,
-            "shot_count": 3,
+            "target_duration_sec": 15,
+            "shot_duration_sec": 15,
+            "shot_durations_sec": [15],
+            "shot_count": 1,
             "grid_count": 1,
-            "total_shots_generated": 3,
+            "total_shots_generated": 1,
             "allowed_shot_durations_sec": [4, 5, 6, 8, 10, 12, 15],
+            "max_clip_duration_sec": 15,
+            "storyboard_layout": "1x3_triptych",
             "character_list": [],
             "target_platform": None,
             "target_audience": None,
             "visual_style": None,
             "human_on_camera": False,
             "aspect_ratio": "9:16",
+            "video_resolution": "1080p",
+            "image_resolution": "2K",
+            "image_size": "16:9",
         }
         return {
             "creative_brief": {

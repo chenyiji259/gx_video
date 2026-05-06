@@ -15,7 +15,8 @@ import type {
 } from './types';
 
 const API_BASE_URL = '/api/v1';
-const AUTH_TOKEN_KEY = 'vidmuse_token';
+const AUTH_TOKEN_KEY = 'guangxi_token';
+const LEGACY_AUTH_TOKEN_KEY = 'vidmuse_token';
 
 type ApiEnvelope<T> = {
   success: boolean;
@@ -25,6 +26,10 @@ type ApiEnvelope<T> = {
     code?: string;
     message?: string;
   };
+};
+
+type ApiErrorPayload = Partial<ApiEnvelope<unknown>> & {
+  detail?: { code?: string; message?: string } | string | unknown;
 };
 
 export class ApiError extends Error {
@@ -39,14 +44,58 @@ export class ApiError extends Error {
   }
 }
 
-const getToken = () => localStorage.getItem(AUTH_TOKEN_KEY);
+const getToken = () => {
+  const token = localStorage.getItem(AUTH_TOKEN_KEY);
+  if (token) return token;
+
+  const legacyToken = localStorage.getItem(LEGACY_AUTH_TOKEN_KEY);
+  if (legacyToken) {
+    localStorage.setItem(AUTH_TOKEN_KEY, legacyToken);
+    localStorage.removeItem(LEGACY_AUTH_TOKEN_KEY);
+  }
+  return legacyToken;
+};
+
+const parseJsonResponse = async (response: Response): Promise<ApiErrorPayload | undefined> => {
+  const rawBody = await response.text();
+  if (!rawBody.trim()) {
+    return undefined;
+  }
+
+  try {
+    return JSON.parse(rawBody) as ApiErrorPayload;
+  } catch {
+    const message = response.ok
+      ? '后端返回了无效的 JSON 响应'
+      : `请求失败: ${response.status}`;
+    throw new ApiError(message, response.status, 'invalid_json_response');
+  }
+};
+
+const extractDetail = (detail: ApiErrorPayload['detail']) => {
+  if (detail && typeof detail === 'object' && !Array.isArray(detail)) {
+    return detail as { code?: string; message?: string };
+  }
+  if (typeof detail === 'string') {
+    return { message: detail };
+  }
+  return undefined;
+};
+
+export const getProjectEventsStreamUrl = (projectId: string) => {
+  const token = getToken();
+  const query = token ? `?token=${encodeURIComponent(token)}` : '';
+  return `${API_BASE_URL}/projects/${encodeURIComponent(projectId)}/events/stream${query}`;
+};
 
 export const setToken = (token: string) => {
   localStorage.setItem(AUTH_TOKEN_KEY, token);
+  localStorage.removeItem(LEGACY_AUTH_TOKEN_KEY);
 };
 
 export const clearToken = () => {
   localStorage.removeItem(AUTH_TOKEN_KEY);
+  localStorage.removeItem(LEGACY_AUTH_TOKEN_KEY);
 };
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -65,30 +114,35 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     headers,
   });
 
-  const payload = (await response.json()) as ApiEnvelope<T> | { detail?: { code?: string; message?: string } };
+  const payload = await parseJsonResponse(response);
 
   if (!response.ok) {
-    const detail = 'detail' in payload ? payload.detail : undefined;
-    const envelopeError = 'error' in payload ? payload.error : undefined;
+    const detail = extractDetail(payload?.detail);
+    const envelopeError = payload && 'error' in payload ? payload.error : undefined;
     const message = detail?.message || envelopeError?.message || `Request failed: ${response.status}`;
     const code = detail?.code || envelopeError?.code;
     throw new ApiError(message, response.status, code);
   }
 
-  if (!('success' in payload) || !payload.success) {
-    const message = ('error' in payload && payload.error?.message) || 'Unknown API error';
-    const code = 'error' in payload ? payload.error?.code : undefined;
+  if (!payload || !('success' in payload) || !payload.success) {
+    const message = payload?.error?.message || '后端返回了空响应或不符合 API 契约';
+    const code = payload?.error?.code || 'invalid_api_response';
     throw new ApiError(message, response.status, code);
   }
 
-  return payload.data;
+  return payload.data as T;
 }
 
 export const isNotFoundError = (error: unknown) =>
   error instanceof ApiError && error.status === 404;
 
 export const authApi = {
-  async login(username: string, password: string): Promise<{ access_token: string; user: User }> {
+  async login(username: string, password: string): Promise<{
+    access_token: string;
+    refresh_token: string;
+    token_type: string;
+    user: User;
+  }> {
     return request('/auth/login', {
       method: 'POST',
       body: JSON.stringify({ username, password }),
@@ -136,6 +190,8 @@ export const projectApi = {
       human_on_camera?: boolean;
       target_duration_sec?: number;
       aspect_ratio?: string;
+      video_resolution?: '480p' | '720p' | '1080p';
+      image_resolution?: '2K';
     }
   ): Promise<{ id: string }> {
     return request(`/projects/${projectId}/spec/versions`, {

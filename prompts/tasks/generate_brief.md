@@ -11,7 +11,7 @@ variables:
   - visual_style
 ---
 
-基于以下用户视频需求，按 system prompt 中的九宫格算法生成 creative_brief + style_bible + extension。
+基于以下用户视频需求，按 system prompt 中的 1x3 三宫格算法生成 creative_brief + style_bible + extension。
 
 ## 用户视频需求描述
 
@@ -30,11 +30,11 @@ variables:
 1. **严格按 system prompt 的 JSON 结构**输出（含 creative_brief / style_bible / extension 三个根键）
 2. **extension 字段必须含完整算法计算结果**：
    - `allowed_shot_durations_sec` 必须写成当前视频模型支持的时长档位数组
-   - 当前版本固定输出 `shot_count = 3`
-   - 当前版本固定输出 `grid_count = 1`
-   - 当前版本固定输出 `total_shots_generated = 3`
-   - `shot_duration_sec` 默认按 10 秒规划
-3. **character_list 中每个角色的 appearance 必须详细**——后续九宫格 prompt 会引用，外貌不一致会导致跨 cell 角色漂移
+   - 15 秒以下固定输出 `shot_count = 1`、`grid_count = 1`、`total_shots_generated = 1`
+   - 15 秒以上按单 clip 不超过 15 秒拆成多个连续 shot，`grid_count = shot_count = total_shots_generated`
+   - 每个 shot 对应一张 1x3 三宫格，三张图分别是起始 / 中间 / 结尾帧
+   - `shot_durations_sec` 必须列出每个 shot 的视频生成时长档位
+3. **character_list 中每个角色的 appearance 必须详细**——后续三宫格 prompt 会引用，外貌不一致会导致跨 cell 角色漂移
 4. **不输出任何解释文字、markdown 标记或代码块包裹**——纯 JSON 字符串
 
 ## narrative_mode 选择参考

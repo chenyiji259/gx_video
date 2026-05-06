@@ -37,7 +37,7 @@ _ASSET_TYPE_SUBPATH: dict[str, str] = {
     "character_reference": "character_reference",
     "scene_reference":     "scene_reference",
     "prop_reference":      "prop_reference",
-    "nine_grid_image":     "nine_grid",   # doc 21 §5.4 九宫格大图
+    "nine_grid_image":     "nine_grid",   # 兼容旧枚举名，当前存三宫格大图
 }
 
 
@@ -403,7 +403,7 @@ class ImageGenerationTool:
         return asset_id
 
     # ------------------------------------------------------------------
-    # 九宫格生图与切分（doc 21 §3 + §5.4）
+    # 三宫格生图与切分
     # ------------------------------------------------------------------
 
     async def generate_nine_grid(
@@ -412,12 +412,12 @@ class ImageGenerationTool:
         project_id: str,
         grid_index: int,
     ) -> str:
-        """生成一张按项目方向映射后的 2K 九宫格大图（asset_type=nine_grid_image）。
+        """生成一张按项目方向映射后的 2K 三宫格大图（asset_type=nine_grid_image）。
 
         Args:
-            bundle:      九宫格 PromptBundle（target_type='nine_grid_image'）
+            bundle:      三宫格 PromptBundle（target_type='nine_grid_image'）
             project_id:  所属项目 ID
-            grid_index:  第几张九宫格（从 1 开始）
+            grid_index:  第几张三宫格（从 1 开始）
 
         Returns:
             新建 Asset 的 asset_id（asset_type=nine_grid_image）
@@ -429,14 +429,21 @@ class ImageGenerationTool:
         params = {**(bundle.params or {})}
         width = int(params.get("width", 3072))
         height = int(params.get("height", 3072))
-        if width % 3 != 0 or height % 3 != 0:
+        target_cell_aspect_ratio = str(
+            params.get("target_cell_aspect_ratio") or params.get("aspect_ratio") or "9:16"
+        )
+        grid_rows = int(params.get("grid_rows") or 1)
+        grid_columns = int(params.get("grid_columns") or 3)
+        if grid_rows != 1 or grid_columns != 3:
+            grid_rows, grid_columns = 1, 3
+        if width % grid_columns != 0 or height % grid_rows != 0:
             raise ImageGenerationError(
-                f"九宫格尺寸必须可被 3 整除，当前 width={width} height={height}",
+                f"三宫格尺寸必须可被 1x3 均匀切分，当前 width={width} height={height}",
                 code="invalid_nine_grid_size",
             )
 
         logger.info(
-            f"九宫格生图开始: provider={bundle.provider!r} grid_index={grid_index} "
+            f"三宫格生图开始: provider={bundle.provider!r} grid_index={grid_index} "
             f"size={params.get('size', f'{width}x{height}')!r} "
             f"resolution={params.get('resolution', '2K')!r} "
             f"orientation={params.get('orientation', 'square')!r}",
@@ -453,15 +460,15 @@ class ImageGenerationTool:
             raise
         except Exception as exc:
             raise ImageGenerationError(
-                f"九宫格生图意外失败: {exc}", code="unexpected_error"
+                f"三宫格生图意外失败: {exc}", code="unexpected_error"
             ) from exc
 
         if not result.image_url:
             raise ImageGenerationError(
-                "九宫格生图 API 返回空 URL", code="empty_url"
+                "三宫格生图 API 返回空 URL", code="empty_url"
             )
         logger.info(
-            f"九宫格 provider 返回图片 URL: grid_index={grid_index} "
+            f"三宫格 provider 返回图片 URL: grid_index={grid_index} "
             f"url={result.image_url[:160]!r} elapsed={time.monotonic() - provider_started_at:.2f}s",
             event_type="nine_grid_generation_result_ready",
         )
@@ -469,7 +476,7 @@ class ImageGenerationTool:
         download_started_at = time.monotonic()
         image_bytes = await self._download_image(result.image_url, timeout=120)
         logger.info(
-            f"九宫格图片下载完成: grid_index={grid_index} size_bytes={len(image_bytes)} "
+            f"三宫格图片下载完成: grid_index={grid_index} size_bytes={len(image_bytes)} "
             f"elapsed={time.monotonic() - download_started_at:.2f}s",
             event_type="nine_grid_download_done",
         )
@@ -490,7 +497,7 @@ class ImageGenerationTool:
         )
         storage_uri = storage.get_permanent_url(object_key)
         logger.info(
-            f"九宫格上传 MinIO 完成: grid_index={grid_index} asset_id={asset_id!r} "
+            f"三宫格上传对象存储完成: grid_index={grid_index} asset_id={asset_id!r} "
             f"object_key={object_key!r} elapsed={time.monotonic() - upload_started_at:.2f}s",
             event_type="nine_grid_upload_done",
         )
@@ -516,6 +523,9 @@ class ImageGenerationTool:
                     "requested_size": params.get("size", f"{width}x{height}"),
                     "requested_resolution": params.get("resolution", "2K"),
                     "requested_orientation": params.get("orientation", "square"),
+                    "target_cell_aspect_ratio": target_cell_aspect_ratio,
+                    "grid_rows": grid_rows,
+                    "grid_columns": grid_columns,
                 },
             )
             await AssetRepository(uow.session).add(asset)
@@ -527,17 +537,17 @@ class ImageGenerationTool:
             local_path = store.planner.nine_grid_dir() / filename
             local_path.write_bytes(image_bytes)
             logger.info(
-                f"九宫格本地副本写入完成: grid_index={grid_index} path={str(local_path)!r}",
+                f"三宫格本地副本写入完成: grid_index={grid_index} path={str(local_path)!r}",
                 event_type="nine_grid_local_copy_done",
             )
         except Exception as exc:
             logger.warning(
-                f"九宫格本地副本写入失败（不影响业务）: {exc}",
+                f"三宫格本地副本写入失败（不影响业务）: {exc}",
                 event_type="nine_grid_local_copy_failed",
             )
 
         logger.info(
-            f"九宫格生图完成: asset_id={asset_id!r} grid_index={grid_index} "
+            f"三宫格生图完成: asset_id={asset_id!r} grid_index={grid_index} "
             f"size={len(image_bytes)} bytes",
             event_type="nine_grid_generation_done",
         )
@@ -549,15 +559,15 @@ class ImageGenerationTool:
         project_id: str,
         grid_index: int,
     ) -> list[str]:
-        """从九宫格大图切分 9 张 1024×1024 cell 图，每张作为 storyboard_frame asset 落库。
+        """从三宫格大图切分 3 张 cell 图，每张作为 storyboard_frame asset 落库。
 
         Args:
-            parent_asset_id:     九宫格大图 asset_id（asset_type=nine_grid_image）
+            parent_asset_id:     三宫格大图 asset_id（asset_type=nine_grid_image）
             project_id:          所属项目 ID
-            grid_index:          第几张九宫格（从 1 开始）
+            grid_index:          第几张三宫格（从 1 开始）
 
         Returns:
-            9 个 asset_id 列表（按 cell_position 1-9 顺序）
+            3 个 asset_id 列表（按 cell_position 1-3 顺序）
         """
         from io import BytesIO
 
@@ -570,45 +580,50 @@ class ImageGenerationTool:
             parent_asset = await AssetRepository(uow.session).get_by_id(parent_asset_id)
         if parent_asset is None:
             raise ImageGenerationError(
-                f"九宫格大图 asset {parent_asset_id!r} 不存在",
+                f"三宫格大图 asset {parent_asset_id!r} 不存在",
                 code="parent_asset_not_found",
             )
+        target_cell_aspect_ratio = (
+            parent_asset.metadata_ or {}
+        ).get("target_cell_aspect_ratio") or (
+            parent_asset.metadata_ or {}
+        ).get("aspect_ratio") or "9:16"
 
         parent_access_url = await build_asset_access_url(parent_asset)
         if not parent_access_url:
             raise ImageGenerationError(
-                f"九宫格大图 asset {parent_asset_id!r} 无可访问 URL",
+                f"三宫格大图 asset {parent_asset_id!r} 无可访问 URL",
                 code="parent_asset_url_missing",
             )
         logger.info(
-            f"开始读取九宫格大图并准备切分: grid_index={grid_index} "
+            f"开始读取三宫格大图并准备切分: grid_index={grid_index} "
             f"parent_asset_id={parent_asset_id!r} parent_url={parent_access_url[:160]!r}",
             event_type="nine_grid_split_parent_fetch_start",
         )
         parent_download_started_at = time.monotonic()
         parent_bytes = await self._download_image(parent_access_url, timeout=120)
         logger.info(
-            f"九宫格大图读取完成: grid_index={grid_index} bytes={len(parent_bytes)} "
+            f"三宫格大图读取完成: grid_index={grid_index} bytes={len(parent_bytes)} "
             f"elapsed={time.monotonic() - parent_download_started_at:.2f}s",
             event_type="nine_grid_split_parent_fetch_done",
         )
 
-        # 2. PIL 切 9 张
+        # 2. PIL 切 3 张
         img = Image.open(BytesIO(parent_bytes))
         if img.mode != "RGB":
             img = img.convert("RGB")
         width, height = img.size
         cell_w = width // 3
-        cell_h = height // 3
+        cell_h = height
         # 轻微向内裁切，避免模型生成的浅色分隔线/白边被直接切进 cell。
         inset_px = 1
 
         storage = get_storage()
         cell_asset_ids: list[str] = []
 
-        for cell_position in range(1, 10):
+        for cell_position in range(1, 4):
             # 计算 cell 在大图中的坐标
-            row = (cell_position - 1) // 3
+            row = 0
             col = (cell_position - 1) % 3
             left = col * cell_w + inset_px
             top = row * cell_h + inset_px
@@ -620,10 +635,14 @@ class ImageGenerationTool:
                 right = left + cell_w
                 bottom = top + cell_h
 
-            cell_img = img.crop((left, top, right, bottom))
+            cell_img = self._crop_to_aspect_ratio(
+                img.crop((left, top, right, bottom)),
+                str(target_cell_aspect_ratio),
+            )
             buf = BytesIO()
             cell_img.save(buf, format="PNG")
             cell_bytes = buf.getvalue()
+            cropped_width, cropped_height = cell_img.size
 
             # 上传 MinIO
             cell_asset_id = generate_ulid()
@@ -647,12 +666,13 @@ class ImageGenerationTool:
                     storage_uri=cell_storage_uri,
                     mime_type="image/png",
                     size_bytes=len(cell_bytes),
-                    width=cell_w,
-                    height=cell_h,
+                    width=cropped_width,
+                    height=cropped_height,
                     metadata_={
                         "grid_index": grid_index,
                         "cell_position": cell_position,
                         "parent_asset_id": parent_asset_id,
+                        "target_cell_aspect_ratio": target_cell_aspect_ratio,
                     },
                 )
                 await AssetRepository(uow.session).add(cell_asset)
@@ -672,7 +692,7 @@ class ImageGenerationTool:
             cell_asset_ids.append(cell_asset_id)
 
         logger.info(
-            f"九宫格切分完成: grid_index={grid_index} cells={len(cell_asset_ids)}",
+            f"三宫格切分完成: grid_index={grid_index} cells={len(cell_asset_ids)}",
             event_type="nine_grid_split_done",
         )
         return cell_asset_ids
@@ -712,3 +732,30 @@ class ImageGenerationTool:
         if url_lower.endswith(".webp"):
             return ".webp"
         return ".jpg"
+
+    @staticmethod
+    def _crop_to_aspect_ratio(img: "Image.Image", aspect_ratio: str) -> "Image.Image":
+        """按目标比例中心裁剪，用于把三宫格 cell 归一到视频参考画幅。"""
+        try:
+            w_str, h_str = aspect_ratio.split(":", 1)
+            ratio_w = float(w_str)
+            ratio_h = float(h_str)
+            if ratio_w <= 0 or ratio_h <= 0:
+                return img
+        except (TypeError, ValueError):
+            return img
+
+        width, height = img.size
+        target_ratio = ratio_w / ratio_h
+        current_ratio = width / height if height else target_ratio
+
+        if abs(current_ratio - target_ratio) < 0.01:
+            return img
+        if current_ratio > target_ratio:
+            new_width = max(1, int(round(height * target_ratio)))
+            left = max(0, (width - new_width) // 2)
+            return img.crop((left, 0, left + new_width, height))
+
+        new_height = max(1, int(round(width / target_ratio)))
+        top = max(0, (height - new_height) // 2)
+        return img.crop((0, top, width, top + new_height))

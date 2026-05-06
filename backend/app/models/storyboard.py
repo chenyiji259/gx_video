@@ -111,7 +111,7 @@ class StoryboardFrame(ULIDMixin, CreatedAtMixin, Base):
             "shot_id",
             "frame_index",
         ),
-        # doc 21 §5.4：九宫格切分位置约束
+        # 兼容旧九宫格历史数据：新三宫格只写入 1-3，旧数据可能存在 1-9。
         CheckConstraint(
             "cell_position IS NULL OR (cell_position >= 1 AND cell_position <= 9)",
             name="ck_storyboard_frames_cell_position",

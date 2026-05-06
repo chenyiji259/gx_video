@@ -104,7 +104,7 @@ class ProjectSnapshot(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# 创意方案扩展字段（doc 21 §1.1 九宫格架构）
+# 创意方案扩展字段（三宫格架构）
 # 这些字段塞在 CreativeBriefVersion.raw_payload 中，
 # 本 schema 用于解析/构造 raw_payload，业务层通过它访问扩展字段。
 # ---------------------------------------------------------------------------
@@ -118,7 +118,7 @@ class CharacterDef(BaseModel):
 
 
 class CreativeBriefExtension(BaseModel):
-    """CreativeBriefVersion.raw_payload 中的九宫格扩展字段（doc 21 §1.1）。
+    """CreativeBriefVersion.raw_payload 中的三宫格扩展字段。
 
     用法：
         ext = CreativeBriefExtension(**brief.raw_payload)
@@ -133,9 +133,15 @@ class CreativeBriefExtension(BaseModel):
     grid_count: int
     total_shots_generated: int
     allowed_shot_durations_sec: list[int] = Field(default_factory=list)
+    shot_durations_sec: list[int] = Field(default_factory=list)
+    max_clip_duration_sec: int = 15
+    storyboard_layout: str = "1x3_triptych"
     character_list: list[CharacterDef] = Field(default_factory=list)
     target_platform: str | None = None
     target_audience: str | None = None
     visual_style: str | None = None
     human_on_camera: bool = False
     aspect_ratio: str = "9:16"
+    video_resolution: str = "1080p"
+    image_resolution: str = "2K"
+    image_size: str | None = None

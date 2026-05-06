@@ -16,8 +16,18 @@ from __future__ import annotations
 import asyncio
 import shutil
 
+from sqlalchemy import delete, or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.core.logging import get_project_logger
+from app.models.asset import Asset
+from app.models.audio_analysis import AudioAnalysisVersion
+from app.models.clip import ClipVersion
+from app.models.export import ExportVersion
+from app.models.planning import Shot
 from app.models.project import Project
+from app.models.storyboard import StoryboardFrame, StoryboardVersion
+from app.models.timeline import TimelineSegment, TimelineVersion
 from app.repositories.project_repository import ProjectRepository
 from app.repositories.unit_of_work import UnitOfWork
 from app.utils.ids import generate_ulid
@@ -47,6 +57,64 @@ STAGE_PROGRESS = {
     "completed": 100,
     "failed": -1
 }
+
+
+async def _delete_project_dependent_rows(
+    session: AsyncSession,
+    project_id: str,
+) -> None:
+    """按外键依赖顺序清理项目产物，避免 RESTRICT 约束拦截项目删除。"""
+    timeline_ids = select(TimelineVersion.id).where(
+        TimelineVersion.project_id == project_id
+    )
+    shot_ids = select(Shot.id).where(Shot.project_id == project_id)
+    clip_ids = select(ClipVersion.id).where(ClipVersion.project_id == project_id)
+
+    await session.execute(
+        delete(TimelineSegment).where(
+            or_(
+                TimelineSegment.timeline_version_id.in_(timeline_ids),
+                TimelineSegment.shot_id.in_(shot_ids),
+                TimelineSegment.clip_version_id.in_(clip_ids),
+            )
+        ).execution_options(synchronize_session=False)
+    )
+
+    await session.execute(
+        delete(ExportVersion)
+        .where(ExportVersion.project_id == project_id)
+        .execution_options(synchronize_session=False)
+    )
+    await session.execute(
+        delete(StoryboardFrame)
+        .where(StoryboardFrame.project_id == project_id)
+        .execution_options(synchronize_session=False)
+    )
+    await session.execute(
+        delete(ClipVersion)
+        .where(ClipVersion.project_id == project_id)
+        .execution_options(synchronize_session=False)
+    )
+    await session.execute(
+        delete(TimelineVersion)
+        .where(TimelineVersion.project_id == project_id)
+        .execution_options(synchronize_session=False)
+    )
+    await session.execute(
+        delete(StoryboardVersion)
+        .where(StoryboardVersion.project_id == project_id)
+        .execution_options(synchronize_session=False)
+    )
+    await session.execute(
+        delete(AudioAnalysisVersion)
+        .where(AudioAnalysisVersion.project_id == project_id)
+        .execution_options(synchronize_session=False)
+    )
+    await session.execute(
+        delete(Asset)
+        .where(Asset.project_id == project_id)
+        .execution_options(synchronize_session=False)
+    )
 
 
 def _project_to_dict(p: Project) -> dict:
@@ -237,7 +305,7 @@ class ProjectService:
         清理顺序：
           1. 对象存储：删除 projects/{project_id}/ 前缀下的所有对象
           2. 本地磁盘：递归删除 data/projects/{project_id}/ 目录
-          3. 数据库：删除 projects 行（ON DELETE CASCADE 自动清理所有关联表）
+          3. 数据库：先清理带 RESTRICT 交叉引用的派生表，再删除 projects 行
 
         第 1、2 步失败只记日志，不阻断第 3 步（确保数据库始终保持干净）。
         """
@@ -282,11 +350,12 @@ class ProjectService:
                 event_type="project_local_clean_failed",
             )
 
-        # --- Step 3: 数据库物理删除（CASCADE 自动清理所有关联表）---
+        # --- Step 3: 数据库物理删除 ---
         async with UnitOfWork() as uow:
             repo = ProjectRepository(uow.session)
             project = await repo.get_by_id_for_user(project_id, user_id)
             if project is not None:
+                await _delete_project_dependent_rows(uow.session, project_id)
                 await repo.delete(project)
 
         logger.info(

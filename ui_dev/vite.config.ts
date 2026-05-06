@@ -4,6 +4,8 @@ import path from 'path';
 import {defineConfig} from 'vite';
 
 export default defineConfig(({mode}) => {
+  const backendTarget = process.env.VITE_BACKEND_TARGET ?? 'http://127.0.0.1:8003';
+
   return {
     plugins: [react(), tailwindcss()],
     resolve: {
@@ -14,11 +16,11 @@ export default defineConfig(({mode}) => {
     server: {
       proxy: {
         '/api': {
-          target: 'http://127.0.0.1:8000',
+          target: backendTarget,
           changeOrigin: true,
         },
         '/v1': {
-          target: 'http://127.0.0.1:8000',
+          target: backendTarget,
           changeOrigin: true,
         },
       },

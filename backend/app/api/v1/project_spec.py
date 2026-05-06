@@ -22,6 +22,7 @@ from app.services.duration_recommendation_service import (
     DurationRecommendationService,
 )
 from app.services.project_spec_service import ProjectSpecError, ProjectSpecService
+from app.services.output_spec_service import normalize_output_config
 
 router = APIRouter(
     prefix="/projects/{project_id}/spec",
@@ -97,6 +98,14 @@ class CreateSpecVersionRequest(BaseModel):
         None,
         description="画面比例：9:16（竖屏/TikTok）/ 16:9（横屏/YouTube）/ 1:1（方形）",
     )
+    video_resolution: Optional[str] = Field(
+        None,
+        description="视频生成清晰度：480p / 720p / 1080p。必须从需求入口确定并传递到 Seedance。",
+    )
+    image_resolution: Optional[str] = Field(
+        None,
+        description="三宫格生图清晰度，当前主流程固定规范化为 2K。",
+    )
 
 
 class ActivateSpecVersionRequest(BaseModel):
@@ -141,8 +150,13 @@ async def create_spec_version(
             _output_config["human_on_camera"] = body.human_on_camera
         if body.target_duration_sec is not None:
             _output_config["target_duration_sec"] = body.target_duration_sec
-        # 画面比例：优先从 aspect_ratio 字段取，其次从 output_config 取，默认 16:9
-        _output_config["aspect_ratio"] = body.aspect_ratio or _output_config.get("aspect_ratio", "16:9")
+        # 画面比例：优先从 aspect_ratio 字段取，其次从 output_config 取，默认 9:16
+        _output_config["aspect_ratio"] = body.aspect_ratio or _output_config.get("aspect_ratio", "9:16")
+        if body.video_resolution is not None:
+            _output_config["video_resolution"] = body.video_resolution
+        if body.image_resolution is not None:
+            _output_config["image_resolution"] = body.image_resolution
+        _output_config = normalize_output_config(_output_config)
         # 新流程 input_mode：有文本需求但无音频时自动切换为 text_only
         _input_mode = body.input_mode
         if not body.audio_asset_id and _input_mode == "audio_text":

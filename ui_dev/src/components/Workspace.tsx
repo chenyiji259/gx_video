@@ -16,6 +16,7 @@ import {
 import { motion } from 'motion/react';
 import {
   ApiError,
+  getProjectEventsStreamUrl,
   isNotFoundError,
   projectApi,
   workflowApi,
@@ -49,6 +50,33 @@ const DEFAULT_FORM = {
   style: '苹果发布会风格',
   humanOnCamera: false,
 };
+
+const FIXED_ASPECT_RATIO = '9:16';
+const FIXED_VIDEO_RESOLUTION = '1080p';
+const FIXED_IMAGE_RESOLUTION = '2K';
+const WORKSPACE_REFRESH_EVENT_TYPES = new Set([
+  'project_created',
+  'project_input_ready',
+  'project_brief_ready',
+  'project_narrative_ready',
+  'project_shot_plan_ready',
+  'storyboard.grid.split_done',
+  'storyboard.all_grids_completed',
+  'project_storyboard_ready',
+  'storyboard.failed',
+  'director.report',
+  'clip.shot.started',
+  'clip.shot.completed',
+  'clip.shot.failed',
+  'clips.all_completed',
+  'clips.stage.failed',
+  'project_clips_ready',
+  'timeline_ready',
+  'project_timeline_ready',
+  'export_ready',
+  'project_export_ready',
+  'project_failed',
+]);
 
 const VIDEO_STYLE_OPTIONS = [
   '苹果发布会风格',
@@ -162,6 +190,7 @@ const getScriptShotContent = (shot: NarrativeShot | Shot) =>
 const ratioToResolution = (ratio?: string | null, resolution = '1080p') => {
   if (ratio === '9:16') return resolution === '1080p' ? '1080 × 1920' : ratio;
   if (ratio === '16:9') return resolution === '1080p' ? '1920 × 1080' : ratio;
+  if (ratio === '1:1') return resolution === '1080p' ? '1080 × 1080' : ratio;
   return ratio || '--';
 };
 
@@ -216,6 +245,8 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
   const [form, setForm] = useState(DEFAULT_FORM);
   const [imagePreview, setImagePreview] = useState<{ title: string; url: string; description?: string } | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const eventRefreshTimerRef = useRef<number | null>(null);
+  const loadWorkspaceRef = useRef<(showSkeleton?: boolean) => Promise<void>>(async () => undefined);
 
   const loadWorkspace = async (showSkeleton = false) => {
     if (showSkeleton) setLoading(true);
@@ -270,9 +301,47 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
       setRefreshing(false);
     }
   };
+  loadWorkspaceRef.current = loadWorkspace;
 
   useEffect(() => {
     void loadWorkspace(true);
+  }, [projectId]);
+
+  useEffect(() => {
+    const eventSource = new EventSource(getProjectEventsStreamUrl(projectId));
+
+    const scheduleWorkspaceRefresh = () => {
+      if (eventRefreshTimerRef.current !== null) {
+        window.clearTimeout(eventRefreshTimerRef.current);
+      }
+      eventRefreshTimerRef.current = window.setTimeout(() => {
+        eventRefreshTimerRef.current = null;
+        void loadWorkspaceRef.current(false);
+      }, 350);
+    };
+
+    eventSource.onmessage = (message) => {
+      try {
+        const event = JSON.parse(message.data) as { event_type?: string };
+        if (event.event_type && WORKSPACE_REFRESH_EVENT_TYPES.has(event.event_type)) {
+          scheduleWorkspaceRefresh();
+        }
+      } catch {
+        // 忽略无法解析的 SSE 消息，后端心跳不会进入 onmessage。
+      }
+    };
+
+    eventSource.onerror = () => {
+      // EventSource 会自动重连，不能在这里 close，否则一次短暂断线后就不会再收到生成完成事件。
+    };
+
+    return () => {
+      eventSource.close();
+      if (eventRefreshTimerRef.current !== null) {
+        window.clearTimeout(eventRefreshTimerRef.current);
+        eventRefreshTimerRef.current = null;
+      }
+    };
   }, [projectId]);
 
   useEffect(() => {
@@ -382,11 +451,22 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
   }, [workspace?.clips, sortedShots.length]);
 
   const creativePackageDecision = workspace?.decisions.find(
-    (decision) => decision.decision_type === 'confirm_narrative'
+    (decision) => decision.decision_type === 'confirm_narrative' && decision.status === 'open'
   ) ?? null;
   const storyboardDecision = workspace?.decisions.find(
-    (decision) => decision.decision_type === 'confirm_storyboard'
+    (decision) => decision.decision_type === 'confirm_storyboard' && decision.status === 'open'
   ) ?? null;
+  const storyboardConfirmed = workspace?.decisions.some(
+    (decision) =>
+      decision.decision_type === 'confirm_storyboard'
+      && decision.status === 'selected'
+      && decision.selected_option_id === 'confirm'
+  ) ?? false;
+  const isClipStageActive = Boolean(
+    workspace
+    && !['storyboard_ready', 'failed'].includes(workspace.project.current_stage)
+    && workspace.clips.length < sortedShots.length
+  );
   const creativePackageConfirmOption = creativePackageDecision?.options_payload?.find((option) => option.id === 'confirm')
     ?? creativePackageDecision?.options_payload?.[0]
     ?? null;
@@ -416,7 +496,9 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
         style_preference: form.style,
         human_on_camera: form.humanOnCamera,
         target_duration_sec: form.duration,
-        aspect_ratio: form.platform === 'bilibili' || form.platform === 'youtube' ? '16:9' : '9:16',
+        aspect_ratio: FIXED_ASPECT_RATIO,
+        video_resolution: FIXED_VIDEO_RESOLUTION,
+        image_resolution: FIXED_IMAGE_RESOLUTION,
       });
       await projectApi.activateSpec(projectId, version.id);
       await workflowApi.generateCreativePackage(projectId);
@@ -468,11 +550,19 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
 
   const handleStep3Primary = async () => {
     if (!workspace) return;
+    if (isStoryboardFailed) {
+      await handleRegenerateKeyframes();
+      return;
+    }
     if (!workspace.storyboardGrids.length) {
       await handleConfirmCreativePackage();
       return;
     }
-    if (workspace.project.current_stage === 'failed' || workspace.clips.length < sortedShots.length) {
+    if (
+      workspace.project.current_stage === 'failed'
+      || storyboardDecision
+      || (storyboardConfirmed && workspace.clips.length < sortedShots.length)
+    ) {
       await handleAction('generate-clips', async () => {
         if (storyboardDecision) {
           await projectApi.selectDecision(
@@ -570,19 +660,28 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
     { label: '风格', value: workspace.brief?.style_direction || form.style },
     { label: '时长', value: `${form.duration}秒左右` },
     { label: '平台', value: getPlatformLabel(form.platform) },
+    { label: '规格', value: `${FIXED_ASPECT_RATIO} · ${FIXED_VIDEO_RESOLUTION}` },
   ];
 
   const previewMedia = activeClip?.storage_uri || workspace.latestExport?.storage_uri || workspace.timeline?.preview_uri || startCell?.asset_url || '';
   const previewIsVideo = isVideoUrl(previewMedia);
   const selectedShotLabel = activeShot ? `镜头 ${activeShot.shot_index + 1}` : '当前镜头';
-  const primaryStep3Label = !workspace.storyboardGrids.length
+  const isProjectFailed = workspace.project.current_stage === 'failed';
+  const isStoryboardFailed = isProjectFailed && !workspace.storyboardGrids.length;
+  const primaryStep3Label = isStoryboardFailed
+    ? '重试关键帧生成'
+    : !workspace.storyboardGrids.length
     ? '等待创意剧本确认'
     : storyboardDecision
       ? (storyboardConfirmOption?.title || storyboardConfirmOption?.label || '确认关键帧并开始生成视频')
-    : workspace.project.current_stage === 'failed'
+    : isClipStageActive
+      ? '视频生成中'
+    : isProjectFailed
       ? '重新生成失败视频'
-      : workspace.clips.length < sortedShots.length
-        ? workspace.clips.length ? '继续生成视频' : '生成视频'
+    : workspace.clips.length < sortedShots.length
+        ? storyboardConfirmed
+          ? workspace.clips.length ? '继续生成视频' : '生成视频'
+          : '等待关键帧确认'
         : '下一镜头';
   const primaryStep6Label = !workspace.timeline
     ? '本地拼接'
@@ -651,12 +750,12 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
                     />
                     <div className="text-right text-xs text-gray-400 mt-1">实时编辑</div>
                   </div>
-                  <div className="w-8 h-8 rounded-full overflow-hidden shrink-0 border border-gray-200">
-                    <img src="https://images.unsplash.com/photo-1544005313-94ddf0286df2?ixlib=rb-4.0.3&auto=format&fit=crop&w=150&q=60" alt="User" />
+                  <div className="w-8 h-8 rounded-full shrink-0 border border-gray-200 bg-gray-900 text-white flex items-center justify-center text-[11px] font-semibold">
+                    光希
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-3 gap-2">
                   <select
                     value={PLATFORM_OPTIONS.some((item) => item.value === form.platform) ? form.platform : '__custom__'}
                     onChange={(e) => {
@@ -676,6 +775,8 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
                   </select>
                   <input
                     type="number"
+                    min={4}
+                    max={600}
                     value={form.duration}
                     onChange={(e) => setForm((prev) => ({ ...prev, duration: Number(e.target.value || 30) }))}
                     className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs text-gray-700 outline-none"
@@ -733,6 +834,15 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
                     className="col-span-2 rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs text-gray-700 outline-none"
                     placeholder="也可以直接输入风格，例如：高级感家居广告、国风水墨短片、电影感人物故事"
                   />
+                  <label className="col-span-2 flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs text-gray-700">
+                    <input
+                      type="checkbox"
+                      checked={form.humanOnCamera}
+                      onChange={(e) => setForm((prev) => ({ ...prev, humanOnCamera: e.target.checked }))}
+                      className="h-4 w-4 rounded border-gray-300 text-violet-600"
+                    />
+                    需要真人主体入镜
+                  </label>
                 </div>
               </div>
 
@@ -859,6 +969,20 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
                 </div>
               ) : null}
 
+              {isStoryboardFailed ? (
+                <div className="mb-3 rounded-xl border border-red-100 bg-red-50 px-3 py-2 text-xs text-red-700 shrink-0">
+                  <div className="font-semibold text-red-800 mb-1">关键帧生成失败</div>
+                  <div className="mb-2">上一次三宫格生图没有生成可用结果，可以直接重试关键帧生成阶段。</div>
+                  <button
+                    onClick={() => void handleRegenerateKeyframes()}
+                    disabled={Boolean(actionLoading)}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-red-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    <RefreshCw className={`w-3 h-3 ${actionLoading === 'regenerate-storyboard' ? 'animate-spin' : ''}`} /> 重试关键帧生成
+                  </button>
+                </div>
+              ) : null}
+
               <div className="flex-1 border border-violet-100 bg-violet-50/30 rounded-2xl p-3 mb-3 flex flex-col min-h-0">
                 <div className="flex items-center gap-2 text-violet-600 font-medium text-xs mb-2 shrink-0">
                   <span className="w-1 h-3 border-l-2 border-violet-600 rounded"></span>
@@ -925,9 +1049,9 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
                     onClick={() => {
                       if (!activeGridOriginalUrl) return;
                       setImagePreview({
-                        title: `九宫格原图${activeGrid?.grid_index ? ` ${activeGrid.grid_index}` : ''}`,
+                        title: `三宫格原图${activeGrid?.grid_index ? ` ${activeGrid.grid_index}` : ''}`,
                         url: activeGridOriginalUrl,
-                        description: '后端返回的九宫格原始大图',
+                        description: '后端返回的三宫格原始大图',
                       });
                     }}
                     disabled={!activeGridOriginalUrl}
@@ -937,7 +1061,7 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
                   </button>
                   <button
                     onClick={() => void handleRegenerateKeyframes()}
-                    disabled={Boolean(actionLoading) || !workspace.storyboardGrids.length}
+                    disabled={Boolean(actionLoading) || (!workspace.storyboardGrids.length && !isStoryboardFailed)}
                     className="flex items-center gap-1.5 text-gray-600 hover:text-gray-900 px-3 py-1.5 bg-white border border-gray-200 rounded-xl transition-colors font-medium text-xs disabled:cursor-not-allowed disabled:opacity-60"
                   >
                     <RefreshCw className={`w-3 h-3 ${actionLoading === 'regenerate-storyboard' ? 'animate-spin' : ''}`} /> 重新生成
@@ -948,7 +1072,12 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
                 </div>
                 <button
                   onClick={() => void handleStep3Primary()}
-                  disabled={Boolean(actionLoading) || (!workspace.storyboardGrids.length && !creativePackageDecision) || (workspace.storyboardGrids.length > 0 && !workspace.clips.length && !storyboardDecision)}
+                  disabled={
+                    Boolean(actionLoading)
+                    || isClipStageActive
+                    || (!isStoryboardFailed && !workspace.storyboardGrids.length && !creativePackageDecision)
+                    || (workspace.storyboardGrids.length > 0 && !workspace.clips.length && !storyboardDecision && !storyboardConfirmed && !isProjectFailed)
+                  }
                   className="flex items-center gap-1.5 bg-violet-600 hover:bg-violet-700 text-white px-4 py-1.5 rounded-xl transition-all shadow-md shadow-violet-200 font-medium text-xs disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   {actionLoading && ['generate-storyboard', 'generate-clips', 'regenerate-storyboard'].includes(actionLoading) ? '处理中...' : step3PrimaryLabel} <ArrowRight className="w-3 h-3" />
@@ -975,7 +1104,7 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
                 <div className="text-[10px] text-gray-500 mt-1.5">预计剩余时间：{estimatedRemaining}</div>
               </div>
 
-              {workspace.project.current_stage === 'failed' ? (
+              {isProjectFailed && !isStoryboardFailed ? (
                 <div className="mb-3 rounded-xl border border-red-100 bg-red-50 p-3 text-xs text-red-700 shrink-0">
                   <div className="font-semibold text-red-800 mb-1">视频生成阶段失败</div>
                   <div className="mb-2">失败镜头可单独重新生成，也可以重试整个视频生成阶段。</div>
@@ -1116,7 +1245,7 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
                   <div className="space-y-2 text-xs text-gray-600 mb-4 border-b border-gray-100 pb-4">
                     <div className="flex items-center gap-1.5"><div className="w-4 flex justify-center"><Play className="w-3 h-3" /></div>预览：{activeClip?.storage_uri ? selectedShotLabel : workspace.latestExport ? '最终导出' : workspace.timeline ? '拼接时间线' : '关键帧'}</div>
                     <div className="flex items-center gap-1.5"><div className="w-4 flex justify-center"><Video className="w-3 h-3" /></div>时长：{formatDurationLabel(workspace.timeline?.total_duration_ms || activeClip?.duration_ms || 30000)}</div>
-                    <div className="flex items-center gap-1.5"><div className="w-4 flex justify-center"><CheckCircle2 className="w-3 h-3" /></div>分辨率：{ratioToResolution(workspace.spec?.output_config?.aspect_ratio, workspace.latestExport?.resolution)}</div>
+                    <div className="flex items-center gap-1.5"><div className="w-4 flex justify-center"><CheckCircle2 className="w-3 h-3" /></div>分辨率：{ratioToResolution(workspace.spec?.output_config?.aspect_ratio, workspace.spec?.output_config?.video_resolution || workspace.latestExport?.resolution)}</div>
                     <div className="flex items-center gap-1.5"><div className="w-4 flex justify-center"><RefreshCw className="w-3 h-3" /></div>比例：{workspace.spec?.output_config?.aspect_ratio || '--'}</div>
                     <div className="flex items-center gap-1.5"><div className="w-4 flex justify-center"><Clock className="w-3 h-3" /></div>生成时间：{new Date(workspace.latestExport?.created_at || workspace.project.updated_at).toLocaleString()}</div>
                   </div>

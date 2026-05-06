@@ -35,6 +35,7 @@ from app.repositories.project_repository import ProjectRepository
 from app.repositories.project_spec_repository import ProjectSpecRepository
 from app.repositories.unit_of_work import UnitOfWork
 from app.services.state_transition_service import state_transition_service
+from app.services.output_spec_service import normalize_output_config, plan_triptych_shots
 from app.storage.local_artifact_store import LocalArtifactStore
 from app.storage.path_planner import ArtifactStage
 
@@ -201,16 +202,10 @@ class BriefPersistenceService:
             #         "AudioAnalysis 未记录 duration_sec），请重新上传并分析音频。",
             #         code="invalid_audio_range",
             #     )
-            target_duration_sec = float(
-                (spec.output_config or {}).get("target_duration_sec", 60.0)
-            )
-            if target_duration_sec <= 0:
-                target_duration_sec = 60.0  # 默认 60 秒
-            aspect_ratio: str = "16:9"
-            output_config: dict[str, Any] = {}
-            if spec.output_config and isinstance(spec.output_config, dict):
-                output_config = spec.output_config
-                aspect_ratio = output_config.get("aspect_ratio", "16:9")
+            output_config: dict[str, Any] = normalize_output_config(spec.output_config)
+            target_duration_sec = float(output_config.get("target_duration_sec", 15.0))
+            aspect_ratio = output_config.get("aspect_ratio", "9:16")
+            triptych_plan = plan_triptych_shots(target_duration_sec)
 
             # 新流程：不再读取音频分析摘要，audio_ref 置为 None
             # audio_analysis_summary = "暂无音乐摘要。"
@@ -251,6 +246,10 @@ class BriefPersistenceService:
             "style_preference": output_config.get("style_preference", ""),
             "human_on_camera": output_config.get("human_on_camera"),
             "allowed_shot_durations_sec": get_provider_registry().list_supported_durations("video", enabled_only=True) or [4, 5, 6, 8, 10, 12, 15],
+            "triptych_plan": triptych_plan,
+            "video_resolution": output_config.get("video_resolution", "1080p"),
+            "image_resolution": output_config.get("image_resolution", "2K"),
+            "image_size": output_config.get("image_size"),
             "version_no": min(brief_version_no, style_version_no),
         })
 
@@ -369,6 +368,20 @@ class BriefPersistenceService:
             if isinstance(style_bible_data, dict) and isinstance(style_bible_data.get("style_bible"), dict)
             else style_bible_data
         ) or {}
+        extension = creative_brief_content.get("extension")
+        if isinstance(extension, dict):
+            normalized_output = normalize_output_config(extension)
+            triptych_plan = plan_triptych_shots(float(normalized_output.get("target_duration_sec") or 15))
+            creative_brief_content["extension"] = {
+                **extension,
+                **triptych_plan,
+                "target_duration_sec": int(triptych_plan["target_duration_sec"]),
+                "aspect_ratio": normalized_output["aspect_ratio"],
+                "video_resolution": normalized_output["video_resolution"],
+                "image_resolution": normalized_output["image_resolution"],
+                "image_size": normalized_output["image_size"],
+                "storyboard_layout": "1x3_triptych",
+            }
 
         _logger.info(
             f"[_PERSIST] 开始落库: project_id={project_id}, current_stage检查前",

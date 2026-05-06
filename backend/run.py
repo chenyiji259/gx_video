@@ -21,7 +21,7 @@ import uvicorn
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="VidMuse Backend Runner")
     parser.add_argument("--host", default="0.0.0.0")
-    parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument("--port", type=int, default=8003)
     parser.add_argument("--reload", action="store_true", help="热重载（开发用，Windows 下 SelectorEventLoop 保障较弱）")
     parser.add_argument("--workers", type=int, default=1)
     args = parser.parse_args()

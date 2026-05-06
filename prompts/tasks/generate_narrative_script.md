@@ -22,13 +22,13 @@ variables:
 
 ## 必须生成的 shot 数量
 
-{{ shot_count_total }} 个 shot（当前版本固定为 3 个 shot，默认每个约 10s，全部落在 {{ grid_count }} 张九宫格中）
+{{ shot_count_total }} 个 shot（每个 shot 对应 1 张 1x3 三宫格和 1 个不超过 15 秒的视频 clip，全部落在 {{ grid_count }} 张三宫格中）
 
 当前版本的分镜规则：
-- 1 张九宫格共 3 行
-- 每一行对应 1 个 shot
+- 1 张三宫格共 1 行 3 列
+- 每张三宫格对应 1 个 shot
 - 每个 shot 必须输出 `start_frame_description / middle_frame_description / end_frame_description`
-- 这 3 段描述会映射成同一行的 3 张图
+- 这 3 段描述会映射成同一张三宫格的 3 张图
 
 ## 角色清单（来自 brief.extension）
 

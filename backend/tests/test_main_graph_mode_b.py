@@ -50,3 +50,39 @@ async def test_director_intake_system_trigger_uses_unified_mode_b(monkeypatch):
     assert result["next_action"] is None
     assert result["pending_decision_id"] == "dec_brief_001"
     assert result["decision_options"] == [{"id": "confirm", "title": "确认并继续"}]
+
+
+@pytest.mark.asyncio
+async def test_director_intake_mode_b_does_not_execute_generation_actions(monkeypatch):
+    class FakeDirectorAgent:
+        async def run(self, state):
+            assert state["system_trigger"]["task_type"] == "generate_storyboard"
+            return {
+                "mode": "report",
+                "message": "关键帧已生成，请确认后再开始视频生成。",
+                "intent": "storyboard_completed",
+                "next_action": "generate_clips",
+                "requires_confirmation": False,
+            }
+
+    monkeypatch.setattr(main_graph, "DirectorAgent", FakeDirectorAgent)
+
+    state = {
+        "project_id": "p1",
+        "user_id": "u1",
+        "session_id": "s1",
+        "history": [],
+        "project_snapshot": {"current_stage": "storyboard_ready"},
+        "system_trigger": {
+            "type": "task_completed",
+            "task_type": "generate_storyboard",
+            "result": {"version_no": 1},
+        },
+    }
+
+    result = await main_graph.director_intake(state)
+
+    assert result["assistant_message"] == "关键帧已生成，请确认后再开始视频生成。"
+    assert result["requires_confirmation"] is False
+    assert result["next_action"] is None
+    assert result["pending_decision_id"] is None

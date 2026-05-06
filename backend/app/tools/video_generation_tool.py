@@ -92,7 +92,7 @@ class VideoGenerationTool:
             try:
                 normalized_duration_sec, _ = get_provider_registry().normalize_duration(
                     "video",
-                    float(requested_duration_sec),
+                    min(float(requested_duration_sec), 15.0),
                     provider_name=bundle.provider,
                 )
                 params["duration_sec"] = normalized_duration_sec

@@ -660,15 +660,15 @@ async def trigger_generate_storyboard(
     request: Request,
     current_user: User = Depends(get_current_user),
 ) -> dict:
-    """触发九宫格 storyboard 生成（REST Worker dispatch 版本）。
+    """触发三宫格 storyboard 生成（REST Worker dispatch 版本）。
 
-    新流程中 narrative 确认后可直接生成九宫格；shot_plan 由后端从 narrative
+    新流程中 narrative 确认后可直接生成三宫格；shot_plan 由后端从 narrative
     自动派生，仅作为视频生成内部输入，不再要求用户额外确认。
     返回 job_id，前端通过 SSE 或轮询获取完成结果。
     """
     req_id = get_request_id(request)
 
-    # 新流程：confirm_narrative 后直接进入九宫格分镜。
+    # 新流程：confirm_narrative 后直接进入三宫格分镜。
     # shot_plan 只是后端从 narrative 派生的内部数据，不再要求用户额外确认。
     async with UnitOfWork() as uow:
         project = await ProjectRepository(uow.session).get_by_id_for_user(
@@ -767,7 +767,7 @@ async def trigger_generate_clips(
                     "code": "invalid_stage",
                     "message": (
                         f"当前阶段 {project.current_stage!r} 还不能开始生成视频，"
-                        "请先完成九宫格生成与切分，进入 storyboard_ready；若本次是视频生成阶段失败，也可在 failed 状态下重试。"
+                        "请先完成三宫格生成与切分，进入 storyboard_ready；若本次是视频生成阶段失败，也可在 failed 状态下重试。"
                     ),
                 },
             )

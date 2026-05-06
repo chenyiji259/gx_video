@@ -1279,10 +1279,19 @@ class TaskWorker:
             if not project_id or tool not in (
                 "generate_character_ref",
                 "generate_scene_ref",
+                "generate_storyboard",
             ):
                 return
 
-            if tool == "generate_character_ref":
+            if tool == "generate_storyboard":
+                event_type = "storyboard.failed"
+                event_payload = {
+                    "job_id": job.id,
+                    "error": str(error.get("message", ""))[:500],
+                    "code": str(error.get("code", "storyboard_failed")),
+                    "retry_count": job.retry_count,
+                }
+            elif tool == "generate_character_ref":
                 event_type = "visual_bible.character_ref.failed"
                 event_payload: dict[str, Any] = {
                     "character_id": payload_data.get("character_id", ""),

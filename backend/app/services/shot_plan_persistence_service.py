@@ -364,7 +364,9 @@ def _apply_duration_plan(
     if not shot_list_data:
         return shot_list_data, target_duration_sec
 
-    allowed_durations = _allowed_video_durations()
+    allowed_durations = [duration for duration in _allowed_video_durations() if duration <= 15]
+    if not allowed_durations:
+        allowed_durations = [4, 5, 6, 8, 10, 12, 15]
     target_total = int(round(target_duration_sec or 0))
 
     normalized_durations: list[int] = []
@@ -1099,7 +1101,7 @@ class ShotPlanPersistenceService:
             )
             shot_list_data.append({
                 "shot_index": int(ns.get("shot_index", idx)),
-                "scene_id": f"scene_{(idx // 3) + 1:03d}",
+                "scene_id": f"scene_{idx + 1:03d}",
                 "scene_type": "verse",
                 "shot_role": "narrative",
                 "subject": ns.get("action_description") or ns.get("end_frame_description") or "",
@@ -1120,16 +1122,14 @@ class ShotPlanPersistenceService:
             float((spec.output_config or {}).get("target_duration_sec", 0) or 0) if spec is not None else 0.0,
         )
 
-        # ---- 步骤 3: 构造 scene_plan_data（当前版本：每张九宫格 3 个 shot）-------------
+        # ---- 步骤 3: 构造 scene_plan_data（当前版本：每张三宫格 1 个 shot）-------------
         scene_plan_data: list[dict] = []
-        grid_count = max(1, (len(shot_list_data) + 2) // 3)
-        for g in range(grid_count):
+        grid_count = max(1, len(shot_list_data))
+        for g, shot in enumerate(shot_list_data):
             scene_plan_data.append({
                 "scene_id": f"scene_{g + 1:03d}",
-                "scene_name": f"九宫格 #{g + 1}",
-                "shot_indices": list(
-                    range(g * 3, min((g + 1) * 3, len(shot_list_data)))
-                ),
+                "scene_name": f"三宫格 #{g + 1}",
+                "shot_indices": [int(shot.get("shot_index", g))],
             })
 
         # ---- 步骤 4: 落库（复用 _persist，但不传 narrative/char_set_version）-----

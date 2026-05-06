@@ -46,8 +46,8 @@ export default function Login({ onNavigate }: LoginProps) {
               />
             </svg>
           </div>
-          <h1 className="text-2xl font-bold text-gray-900">欢迎回来</h1>
-          <p className="text-gray-500 mt-2 text-sm">登录您的 AI 视频创作平台</p>
+          <h1 className="text-2xl font-bold text-gray-900">光希内容创作平台</h1>
+          <p className="text-gray-500 mt-2 text-sm">登录后继续管理项目和视频创作流程</p>
         </div>
 
         <form onSubmit={handleLogin} className="space-y-5">

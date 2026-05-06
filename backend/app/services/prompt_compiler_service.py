@@ -45,6 +45,7 @@ from app.repositories.visual_bible_repository import CharacterSetVersionReposito
 from app.repositories.prompt_bundle_repository import PromptBundleRepository
 from app.schemas.prompt import PromptBundle
 from app.services.asset_access_service import build_asset_access_url
+from app.services.output_spec_service import resolve_triptych_image_spec
 from app.storage.local_artifact_store import LocalArtifactStore
 from app.storage.path_planner import ArtifactStage
 from app.utils.ids import generate_ulid
@@ -445,25 +446,8 @@ def _classify_aspect_ratio_orientation(aspect_ratio: str) -> str:
 
 
 def _resolve_nine_grid_output_spec(aspect_ratio: str) -> dict[str, Any]:
-    """九宫格固定生成 1:1 大图。
-
-    约束：
-      - 所有尺寸都必须能被 3 整除，保证九宫格切分无余数像素
-      - 当前产品流程要求九宫格本身是 1:1 大图：3072x3072
-      - 最终视频画幅仍由 clip/video 阶段按 ProjectSpec.aspect_ratio 控制
-    """
-    orientation = "square"
-    width, height = 3072, 3072
-
-    return {
-        "orientation": orientation,
-        "resolution": "2K",
-        "width": width,
-        "height": height,
-        "size": f"{width}x{height}",
-        "cell_width": width // 3,
-        "cell_height": height // 3,
-    }
+    """兼容旧函数名：当前返回 1x3 三宫格输出规格。"""
+    return resolve_triptych_image_spec(aspect_ratio)
 
 
 # ---------------------------------------------------------------------------
@@ -683,6 +667,16 @@ class PromptCompilerService:
                 **(rendered_result.get("params", {}) or {}),
                 **(
                     {
+                        "aspect_ratio": (spec.output_config or {}).get("aspect_ratio", "9:16"),
+                        "resolution": (spec.output_config or {}).get("video_resolution")
+                        or (spec.output_config or {}).get("resolution")
+                        or "1080p",
+                    }
+                    if is_video_target and spec is not None
+                    else {}
+                ),
+                **(
+                    {
                         "video_reference_mode": generation_mode,
                         "reference_image_urls": ref_image_urls,
                     }
@@ -798,6 +792,15 @@ class PromptCompilerService:
             base_vars["start_frame_description"] = start_frame_description or "（无起始帧描述）"
             base_vars["middle_frame_description"] = middle_frame_description or "（无中间帧描述）"
             base_vars["end_frame_description"] = end_frame_description or "（无结尾帧描述）"
+            output_config = getattr(spec, "output_config", None) or {}
+            base_vars["output_spec"] = "\n".join(
+                [
+                    f"aspect_ratio: {output_config.get('aspect_ratio', '9:16')}",
+                    f"video_resolution: {output_config.get('video_resolution') or output_config.get('resolution') or '1080p'}",
+                    f"storyboard_layout: {output_config.get('storyboard_layout', '1x3_triptych')}",
+                    "single_clip_max_duration_sec: 15",
+                ]
+            )
 
         try:
             # 渲染 prompt 模板
@@ -845,7 +848,7 @@ class PromptCompilerService:
         )
 
     # ------------------------------------------------------------------
-    # doc 21 §3.2 九宫格 prompt 编译
+    # 三宫格 prompt 编译
     # ------------------------------------------------------------------
 
     async def compile_nine_grid_prompt(
@@ -857,14 +860,14 @@ class PromptCompilerService:
         *,
         shot_descriptions: list[dict],
     ) -> PromptBundle:
-        """编译九宫格生图 prompt。
+        """编译三宫格生图 prompt。
 
         Args:
             session:                已开启的 AsyncSession
             project_id:             所属项目 ID
-            grid_index:             第几张九宫格（从 1 开始）
-            total_grids:            总九宫格张数
-            shot_descriptions:      9 个 cell 对应的 shot 描述列表（含 start/middle/end 关键画面描述）
+            grid_index:             第几张三宫格（从 1 开始）
+            total_grids:            总三宫格张数
+            shot_descriptions:      3 个 cell 对应的 shot 描述列表（含 start/middle/end 关键画面描述）
 
         Returns:
             PromptBundle（target_type='nine_grid_image', target_id=f"grid_{grid_index:03d}"）
@@ -876,7 +879,7 @@ class PromptCompilerService:
         brief = await brief_repo.get_active(project_id)
         if brief is None:
             raise PromptCompilerError(
-                "未找到 active brief，无法编译九宫格 prompt",
+                "未找到 active brief，无法编译三宫格 prompt",
                 code="no_brief",
             )
 
@@ -924,7 +927,7 @@ class PromptCompilerService:
             "human_on_camera_text": (
                 "需要真人入镜，关键画面应以真人主体为核心，保持人物外观和服装连续一致。"
                 if ext.human_on_camera
-                else "不需要真人入镜，九宫格中不要出现真人脸、真人身体或真人手部特写，优先场景、产品、图形和抽象主体。"
+                else "不需要真人入镜，三宫格中不要出现真人脸、真人身体或真人手部特写，优先场景、产品、图形和抽象主体。"
             ),
         }
         grid_spec = _resolve_nine_grid_output_spec(ext.aspect_ratio)
@@ -962,7 +965,7 @@ class PromptCompilerService:
                 rendered_result = parsed
         except Exception as exc:  # noqa: BLE001
             logger.warning(
-                f"九宫格 prompt LLM 调用失败（使用兜底）: {exc}",
+                f"三宫格 prompt LLM 调用失败（使用兜底）: {exc}",
                 event_type="nine_grid_compiler_llm_failed",
             )
 
@@ -996,6 +999,10 @@ class PromptCompilerService:
                 "orientation": grid_spec["orientation"],
                 "width": grid_spec["width"],
                 "height": grid_spec["height"],
+                "target_cell_aspect_ratio": grid_spec["target_cell_aspect_ratio"],
+                "grid_rows": 1,
+                "grid_columns": 3,
+                "storyboard_layout": "1x3_triptych",
             },
             source_brief_version_id=brief.id,
             source_style_version_id=style.id if style else None,
@@ -1038,7 +1045,7 @@ class PromptCompilerService:
         )
 
         logger.info(
-            f"九宫格 prompt 编译完成: grid_index={grid_index} provider={provider_name!r}",
+            f"三宫格 prompt 编译完成: grid_index={grid_index} provider={provider_name!r}",
             event_type="nine_grid_prompt_compiled",
         )
         return bundle
@@ -1049,7 +1056,7 @@ def _make_fallback_nine_grid_prompt(
     grid_index: int,
     total_grids: int,
 ) -> dict:
-    """LLM 不可用时的简单兜底（doc 21 §3 九宫格架构）。"""
+    """LLM 不可用时的简单兜底（三宫格架构）。"""
     char_descs = "; ".join(
         f"{c.name}: {c.appearance}" for c in ext.character_list
     ) or "no fixed character"
@@ -1057,9 +1064,9 @@ def _make_fallback_nine_grid_prompt(
     grid_spec = _resolve_nine_grid_output_spec(ext.aspect_ratio)
 
     positive = (
-        f"A 3x3 grid of nine sequential cinematic frames for an AI explainer video, "
+        f"A 1x3 horizontal triptych of three sequential cinematic frames for an AI video shot, "
         f"frame {grid_index} of {total_grids}. "
-        f"Each cell shows a continuous narrative moment from top-left to bottom-right. "
+        f"Left, center and right cells show the start, middle and end of one continuous shot. "
         f"Characters: {char_descs}. "
         + (
             "真人主体必须进入关键画面并保持同一人物的脸部、发型、服装连续一致。 "
@@ -1088,6 +1095,10 @@ def _make_fallback_nine_grid_prompt(
             "orientation": grid_spec["orientation"],
             "width": grid_spec["width"],
             "height": grid_spec["height"],
+            "target_cell_aspect_ratio": grid_spec["target_cell_aspect_ratio"],
+            "grid_rows": 1,
+            "grid_columns": 3,
+            "storyboard_layout": "1x3_triptych",
             "seed": None,
         },
     }
