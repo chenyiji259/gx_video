@@ -56,6 +56,7 @@ from app.services.talking_head_prompt_service import TalkingHeadPromptService
 from app.schemas.event import ProjectEvent
 from app.services.event_log_service import event_log_service
 from app.services.state_transition_service import state_transition_service
+from app.tools.image_generation_tool import ImageGenerationTool
 from app.storage.local_artifact_store import LocalArtifactStore
 from app.storage.path_planner import ArtifactStage
 from app.tools.video_generation_tool import VideoGenerationTool
@@ -85,6 +86,7 @@ class ClipService:
     def __init__(self) -> None:
         self._compiler = PromptCompilerService()
         self._talking_head_compiler = TalkingHeadPromptService()
+        self._image_tool = ImageGenerationTool()
         self._video_tool = VideoGenerationTool()
 
     async def generate_and_save(
@@ -444,19 +446,45 @@ class ClipService:
                 event_type="clip_mode_resolved",
             )
 
-            async with UnitOfWork() as uow:
-                if is_talking_head:
-                    cfg = get_config().talking_head
+            if is_talking_head:
+                cfg = get_config().talking_head
+                async with UnitOfWork() as clean_uow:
+                    clean_bundle = await self._talking_head_compiler.compile_talking_head_clean_reference(
+                        session=clean_uow.session,
+                        project_id=project_id,
+                        shot=shot,
+                        story_board_url=story_board_url,
+                        layout_reading_map=layout_reading_map,
+                    )
+                    logger.debug(
+                        f"shot[{shot_index}] clean reference prompt 编译完成: bundle_id={clean_bundle.bundle_id!r}",
+                        event_type="clip_clean_reference_prompt_compiled",
+                    )
+                clean_reference_meta = await self._image_tool.generate_for_bundle_local(
+                    bundle=clean_bundle,
+                    project_id=project_id,
+                    shot_index=shot_index,
+                    name_prefix="talking_head_clean_reference",
+                )
+                clean_reference_url = str(clean_reference_meta.get("provider_url") or "")
+                if not clean_reference_url:
+                    raise ClipGenerationError(
+                        "shot clean reference 已生成但无法获取访问 URL",
+                        code="missing_clean_reference_url",
+                    )
+                async with UnitOfWork() as uow:
                     bundle = await self._talking_head_compiler.compile_talking_head_video(
                         session=uow.session,
                         project_id=project_id,
                         shot=shot,
                         story_board_url=story_board_url,
+                        clean_reference_url=clean_reference_url,
                         layout_reading_map=layout_reading_map,
                         host_reference_assets=cfg.host_reference_image_assets,
                         reference_audio_assets=cfg.reference_audio_assets,
                     )
-                else:
+            else:
+                async with UnitOfWork() as uow:
                     bundle = await self._compiler.compile_for_shot(
                         session=uow.session,
                         shot_id=shot_id,
@@ -475,14 +503,16 @@ class ClipService:
                 )
 
             # 视频生成（不在 UoW 内，避免长时间持有 DB 连接）
+            final_reference_image_urls = list(bundle.reference_image_urls or reference_image_urls)
+            final_reference_audio_urls = list(bundle.reference_audio_urls or reference_audio_urls)
             asset_id, actual_duration_ms = await self._video_tool.generate_for_bundle(
                 bundle=bundle,
                 project_id=project_id,
                 mode=mode,
                 shot_index=shot_index,
-                reference_image_url=reference_image_urls[0] if reference_image_urls else None,
-                reference_image_urls=reference_image_urls,
-                reference_audio_urls=reference_audio_urls,
+                reference_image_url=final_reference_image_urls[0] if final_reference_image_urls else None,
+                reference_image_urls=final_reference_image_urls,
+                reference_audio_urls=final_reference_audio_urls,
             )
             # 使用 provider 实际返回的视频时长； provider 未返回时回落到计划值
             duration_ms = actual_duration_ms if actual_duration_ms else (shot.duration_ms or 5000)

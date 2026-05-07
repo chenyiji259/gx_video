@@ -14,7 +14,8 @@
 from __future__ import annotations
 
 import time
-from typing import Optional
+import json
+from typing import Any, Optional
 
 import httpx
 
@@ -225,6 +226,105 @@ class ImageGenerationTool:
             event_type="image_generation_done",
         )
         return asset_id
+
+    async def generate_for_bundle_local(
+        self,
+        bundle: PromptBundle,
+        project_id: str,
+        *,
+        shot_index: Optional[int] = None,
+        name_prefix: str = "local_image",
+    ) -> dict[str, Any]:
+        """生成内部临时图片，只写本地文件，不上传 OSS、不落库 Asset。
+
+        用于口播 clean reference：Seedance 需要立即使用 provider 返回的临时 URL，
+        本地副本用于排查和效果回看，不进入前端展示资产链路。
+        """
+        logger = get_project_logger(project_id, module="tools.image_generation")
+        adapter = get_image_provider(bundle.provider)
+        ref_urls: list[str] = getattr(bundle, "reference_image_urls", None) or []
+        ref_single: str | None = getattr(bundle, "reference_image_url", None)
+
+        try:
+            if ref_urls:
+                if hasattr(adapter, "generate_multi_ref_img2img"):
+                    result = await adapter.generate_multi_ref_img2img(
+                        prompt=bundle.positive_prompt,
+                        image_urls=ref_urls,
+                        strength=getattr(bundle, "reference_weight", 0.75),
+                        negative_prompt=bundle.negative_prompt,
+                        params=bundle.params,
+                    )
+                else:
+                    result = await adapter.generate_img2img(
+                        prompt=bundle.positive_prompt,
+                        image_url=ref_urls[0],
+                        strength=getattr(bundle, "reference_weight", 0.75),
+                        negative_prompt=bundle.negative_prompt,
+                        params=bundle.params,
+                    )
+            elif ref_single:
+                result = await adapter.generate_img2img(
+                    prompt=bundle.positive_prompt,
+                    image_url=ref_single,
+                    strength=getattr(bundle, "reference_weight", 0.75),
+                    negative_prompt=bundle.negative_prompt,
+                    params=bundle.params,
+                )
+            else:
+                result = await adapter.generate(
+                    prompt=bundle.positive_prompt,
+                    negative_prompt=bundle.negative_prompt,
+                    params=bundle.params,
+                )
+        except ImageGenerationError:
+            raise
+        except Exception as exc:
+            raise ImageGenerationError(
+                f"本地临时图片生成意外失败: {exc}", code="unexpected_error"
+            ) from exc
+
+        if not result.image_url:
+            raise ImageGenerationError(
+                "图片生成 API 返回空 URL", code="empty_url"
+            )
+
+        image_bytes = await self._download_image(result.image_url, timeout=60)
+        suffix = self._infer_suffix(result.image_url)
+        shot_part = f"shot_{shot_index + 1:03d}" if shot_index is not None else "shot"
+        filename = f"{name_prefix}_{shot_part}{suffix}"
+        metadata_filename = f"{name_prefix}_{shot_part}.json"
+
+        local_dir = LocalArtifactStore(project_id).planner.stage_dir(
+            ArtifactStage.STORYBOARD, create=True
+        )
+        local_path = local_dir / filename
+        local_path.write_bytes(image_bytes)
+        metadata = {
+            "bundle_id": bundle.bundle_id,
+            "target_type": bundle.target_type,
+            "target_id": bundle.target_id,
+            "provider": bundle.provider,
+            "shot_index": shot_index,
+            "provider_url": result.image_url,
+            "local_path": str(local_path),
+            "width": result.width,
+            "height": result.height,
+            "seed": result.seed,
+            "params": bundle.params,
+            "reference_image_urls": ref_urls,
+            "reference_weight": getattr(bundle, "reference_weight", 0.75),
+        }
+        (local_dir / metadata_filename).write_text(
+            json.dumps(metadata, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        logger.info(
+            f"本地临时图片生成完成: provider_url={result.image_url[:80]} "
+            f"local_path={str(local_path)!r}",
+            event_type="local_image_generation_done",
+        )
+        return metadata
 
     # ------------------------------------------------------------------
     # 参考图生成（doc11 批次2）

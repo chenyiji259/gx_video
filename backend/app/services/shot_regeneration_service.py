@@ -49,6 +49,7 @@ from app.services.state_transition_service import state_transition_service
 from app.services.talking_head_prompt_service import TalkingHeadPromptService
 from app.storage.local_artifact_store import LocalArtifactStore
 from app.storage.path_planner import ArtifactStage
+from app.tools.image_generation_tool import ImageGenerationTool
 from app.tools.video_generation_tool import VideoGenerationTool
 from app.utils.ids import generate_ulid
 
@@ -88,6 +89,7 @@ class ShotRegenerationService:
     def __init__(self) -> None:
         self._compiler = PromptCompilerService()
         self._talking_head_compiler = TalkingHeadPromptService()
+        self._image_tool = ImageGenerationTool()
         self._video_tool = VideoGenerationTool()
         self._cost_svc = CostEstimationService()
         self._idem_redis: aioredis.Redis | None = None
@@ -219,19 +221,41 @@ class ShotRegenerationService:
 
         # ---- 步骤 2: 编译 PromptBundle ----------------------------------------
         try:
-            async with UnitOfWork() as uow:
-                if storyboard_layout == TALKING_HEAD_LAYOUT:
-                    cfg = get_config().talking_head
+            if storyboard_layout == TALKING_HEAD_LAYOUT:
+                cfg = get_config().talking_head
+                async with UnitOfWork() as clean_uow:
+                    clean_bundle = await self._talking_head_compiler.compile_talking_head_clean_reference(
+                        session=clean_uow.session,
+                        project_id=project_id,
+                        shot=shot,
+                        story_board_url=story_board_url,
+                        layout_reading_map=layout_reading_map,
+                    )
+                clean_reference_meta = await self._image_tool.generate_for_bundle_local(
+                    bundle=clean_bundle,
+                    project_id=project_id,
+                    shot_index=shot.shot_index,
+                    name_prefix="talking_head_clean_reference",
+                )
+                clean_reference_url = str(clean_reference_meta.get("provider_url") or "")
+                if not clean_reference_url:
+                    raise ShotRegenerationError(
+                        "shot clean reference 已生成但无法获取访问 URL",
+                        code="missing_clean_reference_url",
+                    )
+                async with UnitOfWork() as uow:
                     bundle = await self._talking_head_compiler.compile_talking_head_video(
                         session=uow.session,
                         project_id=project_id,
                         shot=shot,
                         story_board_url=story_board_url,
+                        clean_reference_url=clean_reference_url,
                         layout_reading_map=layout_reading_map,
                         host_reference_assets=cfg.host_reference_image_assets,
                         reference_audio_assets=cfg.reference_audio_assets,
                     )
-                else:
+            else:
+                async with UnitOfWork() as uow:
                     bundle = await self._compiler.compile_for_shot(
                         session=uow.session,
                         shot_id=shot_id,
@@ -249,14 +273,16 @@ class ShotRegenerationService:
 
         # ---- 步骤 3: 生成视频 ----------------------------------------
         try:
+            final_reference_image_urls = list(bundle.reference_image_urls or reference_image_urls)
+            final_reference_audio_urls = list(bundle.reference_audio_urls or reference_audio_urls)
             asset_id, actual_duration_ms = await self._video_tool.generate_for_bundle(
                 bundle=bundle,
                 project_id=project_id,
                 mode=mode,
                 shot_index=shot.shot_index,
-                reference_image_url=reference_image_urls[0] if reference_image_urls else None,
-                reference_image_urls=reference_image_urls,
-                reference_audio_urls=reference_audio_urls,
+                reference_image_url=final_reference_image_urls[0] if final_reference_image_urls else None,
+                reference_image_urls=final_reference_image_urls,
+                reference_audio_urls=final_reference_audio_urls,
             )
         except VideoGenerationError:
             if idem_locked:
