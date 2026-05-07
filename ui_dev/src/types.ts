@@ -50,6 +50,13 @@ export interface ProjectSpec {
     image_resolution?: string;
     image_size?: string;
     storyboard_layout?: string;
+    generation_profile?: string;
+    content_type?: string;
+    segment_duration_sec?: number;
+    segment_count?: number;
+    story_board_aspect_ratio?: string;
+    style_preset_locked?: boolean;
+    subtitles_enabled?: boolean;
   } | null;
 }
 
@@ -116,6 +123,9 @@ export interface Shot {
   lyric_text?: string | null;
   camera_language?: string | null;
   status?: string | null;
+  segment_index?: number | null;
+  segment_time_range?: string | null;
+  story_board_segment_label?: string | null;
   last_failure?: {
     code?: string | null;
     message?: string | null;
@@ -138,9 +148,20 @@ export interface StoryboardCell {
 
 export interface StoryboardGrid {
   grid_index: number;
+  board_type?: string | null;
   parent_asset_id?: string | null;
   parent_asset_url?: string | null;
   bundle_id?: string | null;
+  cell_count?: number | null;
+  layout_reading_map?: Record<string, unknown> | null;
+  story_board_aspect_ratio?: string | null;
+  segment_count?: number | null;
+  segments?: Array<{
+    segment_index?: number;
+    shot_index?: number;
+    time_range?: string;
+    reading_instruction?: string;
+  }> | null;
   cells: StoryboardCell[];
 }
 

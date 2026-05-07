@@ -4,7 +4,7 @@
   - gpt-image-2（ToApis 中转）
 
 接入约束（当前项目主链路）：
-  - ToApis GPT Image 2 size 使用官方白名单比例；三宫格固定 16:9 + 2K。
+  - ToApis GPT Image 2 size 使用官方白名单比例；三宫格固定 16:9 + 2K，口播 Story Overview Board 使用 21:9 + 4K。
   - 目标视频画幅由下游切分裁剪逻辑处理，不把 27:16 等内部画布比例传给 provider。
   - metadata.resolution 走项目侧决策（当前默认 2K）
   - metadata.orientation 按 portrait / landscape / square 传入
@@ -44,6 +44,7 @@ _RATIO_TO_PROVIDER_SIZE: dict[str, str] = {
     "2:3": "2:3",
     "3:4": "3:4",
     "16:9": "16:9",
+    "21:9": "21:9",
     "3:2": "3:2",
     "4:3": "4:3",
 }
@@ -391,6 +392,7 @@ class GPTImageAdapter:
             "2:3": (3072, 2048),
             "3:4": (3072, 2304),
             "16:9": (3072, 1728),
+            "21:9": (4096, 1755),
             "3:2": (3072, 2048),
             "4:3": (3072, 2304),
         }

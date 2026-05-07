@@ -192,6 +192,12 @@ export const projectApi = {
       aspect_ratio?: string;
       video_resolution?: '480p' | '720p' | '1080p';
       image_resolution?: '2K';
+      generation_profile?: string;
+      storyboard_layout?: string;
+      segment_duration_sec?: number;
+      story_board_aspect_ratio?: string;
+      style_preset_locked?: boolean;
+      subtitles_enabled?: boolean;
     }
   ): Promise<{ id: string }> {
     return request(`/projects/${projectId}/spec/versions`, {
@@ -297,7 +303,10 @@ export const workflowApi = {
     return request(`/projects/${projectId}/timeline/compose`, { method: 'POST' });
   },
 
-  triggerExport(projectId: string, resolution: '720p' | '1080p' | '2K' | '4K' = '1080p') {
+  triggerExport(
+    projectId: string,
+    resolution: '720p' | '1080p' | '2K' | '4K' = '1080p'
+  ): Promise<ExportRecord & { message?: string }> {
     return request(`/projects/${projectId}/exports`, {
       method: 'POST',
       body: JSON.stringify({ resolution }),

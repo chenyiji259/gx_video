@@ -15,6 +15,23 @@ api:
 media:
   ffmpeg_path: '${FFMPEG_PATH}'
 
+talking_head:
+  # Story Overview Board 生图阶段使用：本地人物图会上传为公网/签名 URL 传给图片模型。
+  # Seedance 视频阶段仍使用 host_reference_image_assets 的 asset:// 资产。
+  story_board_reference_image_dir: "data/person_pic"
+  host_reference_image_assets:
+    - "asset://asset-20260506200636-lmt8b"
+    - "asset://asset-20260506200638-6g86k"
+    - "asset://asset-20260506200638-5pf4j"
+
+  reference_audio_assets:
+    - "asset://asset-20260506202002-hhmgk"
+    - "asset://asset-20260506202001-fg589"
+    - "asset://asset-20260506202001-hl2kx"
+  story_board_aspect_ratio: "21:9"
+  segment_duration_sec: 15
+  subtitles_enabled: false
+
 jwt:
   # Secret key for signing tokens - injected from env var, never hardcoded
   secret: "${JWT_SECRET}"

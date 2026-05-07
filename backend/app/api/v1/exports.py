@@ -75,6 +75,8 @@ async def trigger_export(
     return ok(
         data={
             "export_version_id": export_version.id,
+            "timeline_version_id": export_version.timeline_version_id,
+            "asset_id": export_version.asset_id,
             "resolution": export_version.resolution,
             "status": export_version.status,
             "storage_uri": asset_url,

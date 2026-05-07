@@ -35,7 +35,12 @@ from app.repositories.project_repository import ProjectRepository
 from app.repositories.project_spec_repository import ProjectSpecRepository
 from app.repositories.unit_of_work import UnitOfWork
 from app.services.state_transition_service import state_transition_service
-from app.services.output_spec_service import normalize_output_config, plan_triptych_shots
+from app.services.output_spec_service import (
+    is_talking_head_config,
+    normalize_output_config,
+    plan_talking_head_segments,
+    plan_triptych_shots,
+)
 from app.storage.local_artifact_store import LocalArtifactStore
 from app.storage.path_planner import ArtifactStage
 
@@ -51,6 +56,14 @@ class BriefGenerationError(Exception):
         super().__init__(message)
         self.code = code
         self.message = message
+
+
+TALKING_HEAD_HOST_CHARACTER = {
+    "character_id": "host_001",
+    "name": "50岁男性护肤专家",
+    "appearance": "50岁男性护肤专家",
+    "personality": "专业、亲和、可信",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -205,7 +218,11 @@ class BriefPersistenceService:
             output_config: dict[str, Any] = normalize_output_config(spec.output_config)
             target_duration_sec = float(output_config.get("target_duration_sec", 15.0))
             aspect_ratio = output_config.get("aspect_ratio", "9:16")
-            triptych_plan = plan_triptych_shots(target_duration_sec)
+            storyboard_plan = (
+                plan_talking_head_segments(target_duration_sec)
+                if is_talking_head_config(output_config)
+                else plan_triptych_shots(target_duration_sec)
+            )
 
             # 新流程：不再读取音频分析摘要，audio_ref 置为 None
             # audio_analysis_summary = "暂无音乐摘要。"
@@ -246,7 +263,13 @@ class BriefPersistenceService:
             "style_preference": output_config.get("style_preference", ""),
             "human_on_camera": output_config.get("human_on_camera"),
             "allowed_shot_durations_sec": get_provider_registry().list_supported_durations("video", enabled_only=True) or [4, 5, 6, 8, 10, 12, 15],
-            "triptych_plan": triptych_plan,
+            "triptych_plan": storyboard_plan,
+            "storyboard_plan": storyboard_plan,
+            "generation_profile": output_config.get("generation_profile"),
+            "storyboard_layout": output_config.get("storyboard_layout"),
+            "segment_duration_sec": output_config.get("segment_duration_sec"),
+            "story_board_aspect_ratio": output_config.get("story_board_aspect_ratio"),
+            "subtitles_enabled": output_config.get("subtitles_enabled"),
             "video_resolution": output_config.get("video_resolution", "1080p"),
             "image_resolution": output_config.get("image_resolution", "2K"),
             "image_size": output_config.get("image_size"),
@@ -371,17 +394,29 @@ class BriefPersistenceService:
         extension = creative_brief_content.get("extension")
         if isinstance(extension, dict):
             normalized_output = normalize_output_config(extension)
-            triptych_plan = plan_triptych_shots(float(normalized_output.get("target_duration_sec") or 15))
+            storyboard_plan = (
+                plan_talking_head_segments(float(normalized_output.get("target_duration_sec") or 15))
+                if is_talking_head_config(normalized_output)
+                else plan_triptych_shots(float(normalized_output.get("target_duration_sec") or 15))
+            )
             creative_brief_content["extension"] = {
                 **extension,
-                **triptych_plan,
-                "target_duration_sec": int(triptych_plan["target_duration_sec"]),
+                **storyboard_plan,
+                "target_duration_sec": int(storyboard_plan["target_duration_sec"]),
                 "aspect_ratio": normalized_output["aspect_ratio"],
                 "video_resolution": normalized_output["video_resolution"],
                 "image_resolution": normalized_output["image_resolution"],
-                "image_size": normalized_output["image_size"],
-                "storyboard_layout": "1x3_triptych",
+                "image_size": normalized_output.get("image_size") or normalized_output.get("story_board_image_size"),
+                "storyboard_layout": normalized_output["storyboard_layout"],
+                "generation_profile": normalized_output.get("generation_profile"),
+                "segment_duration_sec": normalized_output.get("segment_duration_sec"),
+                "story_board_aspect_ratio": normalized_output.get("story_board_aspect_ratio"),
+                "subtitles_enabled": normalized_output.get("subtitles_enabled", False),
             }
+            if is_talking_head_config(normalized_output):
+                creative_brief_content["extension"]["character_list"] = [
+                    dict(TALKING_HEAD_HOST_CHARACTER)
+                ]
 
         _logger.info(
             f"[_PERSIST] 开始落库: project_id={project_id}, current_stage检查前",

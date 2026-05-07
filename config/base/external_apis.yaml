@@ -28,10 +28,10 @@ external_apis:
     timeout: 660
 
     # 轮询间隔（秒）
-    poll_interval: 10
+    poll_interval: 7
 
-    # 最大轮询次数（660s / 10s = 66 次）
-    max_poll_attempts: 66
+    # 最大轮询次数（7s * 100 = 700s）
+    max_poll_attempts: 100
 
   # --------------------------------------------------------------------------
   # Ark — 火山方舟 Seedance 2.0 视频生成
@@ -51,5 +51,5 @@ external_apis:
     # 轮询间隔（秒）：官方建议 10-30s
     poll_interval: 15
 
-    # 最大轮询次数（660s / 15s ≈ 44 次，留余量取 50）
-    max_poll_attempts: 50
+    # 最大轮询次数
+    max_poll_attempts: 100

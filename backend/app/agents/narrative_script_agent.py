@@ -311,6 +311,8 @@ class NarrativeScriptAgent:
         allowed_shot_durations_sec = task_spec.get("allowed_shot_durations_sec") or [4, 5, 6, 8, 10, 12, 15]
         shot_count_total: int = int(task_spec.get("shot_count_total") or 1)
         grid_count: int = int(task_spec.get("grid_count") or shot_count_total)
+        storyboard_layout = str(task_spec.get("storyboard_layout") or "")
+        is_talking_head = storyboard_layout == "talking_head_story_overview_board"
 
         # 参考图提示词：告知 Agent 用户上传了几张图，影响角色生成逻辑
         if reference_image_count > 0:
@@ -323,6 +325,12 @@ class NarrativeScriptAgent:
             )
         else:
             ref_hint = "用户未上传角色参考图，角色将在视觉圣经阶段完全重新生成。"
+        if is_talking_head:
+            ref_hint = (
+                "【口播角色硬约束】本项目只有 1 位固定主角：50岁男性护肤专家。"
+                "characters 必须继承 brief.extension.character_list 中的 host_001，不得新增女性角色、多人角色或其他职业身份。"
+                "角色资产仅用于锁定同一位 50岁男性护肤专家。"
+            )
 
         task_msg = (
             f"项目 ID：{project_id}\n用户描述：{user_prompt or '（未提供）'}\n"
@@ -331,19 +339,38 @@ class NarrativeScriptAgent:
             f"风格圣经引用：{json.dumps(style_ref, ensure_ascii=False)}\n"
             f"音乐分析引用：{json.dumps(audio_ref, ensure_ascii=False)}\n\n"
             f"目标总时长：{target_duration_sec} 秒\n"
-            f"三宫格 shot 数：{shot_count_total}，三宫格张数：{grid_count}。15 秒以下为 1 个 shot；超过 15 秒按每段不超过 15 秒连续拆分。\n"
+            + (
+                f"口播 Production Board segment 数：{shot_count_total}，每个 segment/shot 固定 15 秒。"
+                f"后续只生成 1 张 21:9 故事大图，所有 shot 复用同一张图并读取不同 Segment 区域。\n"
+                if is_talking_head
+                else f"三宫格 shot 数：{shot_count_total}，三宫格张数：{grid_count}。15 秒以下为 1 个 shot；超过 15 秒按每段不超过 15 秒连续拆分。\n"
+            )
+            +
             f"允许的单 shot 时长档位：{', '.join(str(item) for item in allowed_shot_durations_sec)}\n\n"
             f"请先使用 read_artifact_tool 读取创意简报和风格圣经，尤其要读取 "
             f"creative_brief.extension.total_shots_generated、target_duration_sec、allowed_shot_durations_sec、character_list、aspect_ratio。"
             f"然后生成叙事剧本 JSON，根对象必须包含 story_arc / shots / characters / scenes。"
             f"其中 shots 必须是逐镜头数组，数量必须等于 {shot_count_total}；"
-            f"每个 shot 的 duration_sec 必须从允许档位中选择，且不得超过 15 秒，全部 shot 的时长总和要尽量贴近 target_duration_sec；"
+            f"每个 shot 的 duration_sec {'必须等于 15 秒' if is_talking_head else '必须从允许档位中选择，且不得超过 15 秒'}，全部 shot 的时长总和要等于或尽量贴近 target_duration_sec；"
             f"characters 必须来自 brief.extension.character_list，不能丢失已有角色；"
+            + (
+                "口播项目中 characters 只能保留 host_001：50岁男性护肤专家，所有 shots[*].characters_in_shot 都必须引用 host_001；"
+                if is_talking_head
+                else ""
+            )
+            +
             f"scenes 必须从 shot 的场景中抽成结构化数组，不能为空；"
             f"根对象还必须包含 audio_strategy；每个 shot 还必须包含 audio_strategy。"
             f"每个 shot 必须包含 shot_index / duration_sec / scene_description / "
             f"characters_in_shot / start_frame_description / middle_frame_description / end_frame_description / "
             f"action_description / dialogue / audio_strategy / emotion / emotion_intensity。"
+            + (
+                f"口播类每个 shot 还应尽量补充 segment_goal、time_range、speech_timing_plan、supporting_visuals，"
+                f"允许开场动画、产品特写、停顿或无对白片段；不要要求 15 秒全程说话；不要设计字幕。\n"
+                if is_talking_head
+                else ""
+            )
+            +
             f"请先判断这是讲解类、广告类、剧情类还是纯视觉表达，再决定哪些 shot 的 dialogue 非空。"
             f"dialogue 字段必须存在，但不是每个 shot 都必须有实际台词内容。"
             f"如果是讲解/旁白类视频，台词应作为整段连续文案拆分到若干关键 shot；"

@@ -20,7 +20,11 @@ from typing import Any
 from app.agents.narrative_script_agent import NarrativeScriptAgent
 from app.core.logging import get_project_logger
 from app.core.provider_registry import get_provider_registry
-from app.services.output_spec_service import plan_triptych_shots
+from app.services.output_spec_service import (
+    is_talking_head_config,
+    plan_talking_head_segments,
+    plan_triptych_shots,
+)
 from app.tools.shared.artifact_tools import build_ref_from_asset_latest, read_artifact
 from app.domain.states import ProjectStage
 from app.models.visual_bible import NarrativeScriptVersion
@@ -303,7 +307,11 @@ class NarrativeScriptService:
             allowed_shot_durations_sec = [int(item) for item in allowed_shot_durations_sec if int(item) <= 15]
             if not allowed_shot_durations_sec:
                 allowed_shot_durations_sec = [4, 5, 6, 8, 10, 12, 15]
-            triptych_plan = plan_triptych_shots(target_duration_sec)
+            triptych_plan = (
+                plan_talking_head_segments(target_duration_sec)
+                if is_talking_head_config(extension)
+                else plan_triptych_shots(target_duration_sec)
+            )
             shot_count_total = int(extension.get("total_shots_generated") or triptych_plan["total_shots_generated"])
             grid_count = int(extension.get("grid_count") or triptych_plan["grid_count"])
 
@@ -324,6 +332,7 @@ class NarrativeScriptService:
             "allowed_shot_durations_sec": allowed_shot_durations_sec,
             "shot_count_total": shot_count_total,
             "grid_count": grid_count,
+            "storyboard_layout": extension.get("storyboard_layout"),
             "version_no": next_version_no,
         }
         artifact_ref = await self._agent.run(task_spec)

@@ -28,6 +28,7 @@ import asyncio
 import time
 from typing import Any
 
+from app.core.config import get_config
 from app.core.logging import get_project_logger
 from app.domain.states import ProjectStage
 from app.models.clip import ClipVersion
@@ -44,9 +45,14 @@ from app.repositories.storyboard_repositories import (
     StoryboardVersionRepository,
 )
 from app.repositories.unit_of_work import UnitOfWork
-from app.services.asset_access_service import build_asset_access_url, build_asset_access_url_map
+from app.services.asset_access_service import (
+    build_asset_access_url,
+    build_asset_access_url_map,
+)
 from app.services.concurrency_guard_service import ConcurrencyError, concurrency_guard
+from app.services.output_spec_service import TALKING_HEAD_LAYOUT
 from app.services.prompt_compiler_service import PromptCompilerError, PromptCompilerService
+from app.services.talking_head_prompt_service import TalkingHeadPromptService
 from app.schemas.event import ProjectEvent
 from app.services.event_log_service import event_log_service
 from app.services.state_transition_service import state_transition_service
@@ -78,6 +84,7 @@ class ClipService:
 
     def __init__(self) -> None:
         self._compiler = PromptCompilerService()
+        self._talking_head_compiler = TalkingHeadPromptService()
         self._video_tool = VideoGenerationTool()
 
     async def generate_and_save(
@@ -164,46 +171,76 @@ class ClipService:
             asset_repo = AssetRepository(session)
             shot_frame_urls_map: dict[str, list[str]] = {}
             shot_frame_desc_map: dict[str, dict[str, str | None]] = {}
+            shot_audio_urls_map: dict[str, list[str]] = {}
+            story_board_url = ""
+            layout_reading_map: dict[str, Any] = {}
+            storyboard_layout = ""
             sorted_shots = sorted(shots_to_process, key=lambda s: s.shot_index)
             if sb_version and sb_version.raw_payload:
-                cell_asset_ids: set[str] = set()
-                frames_by_shot_index: dict[int, list[str | None]] = {}
-                desc_by_shot_index: dict[int, dict[str, str | None]] = {}
-                for grid in (sb_version.raw_payload.get("grids") or []):
-                    grid_index = int(grid.get("grid_index") or 1)
-                    shot_index = grid_index - 1
-                    cells = sorted(
-                        (grid.get("cells") or []),
-                        key=lambda cell: int(cell.get("cell_position") or 0),
-                    )
-                    shot_cells = cells[:3]
-                    frames_by_shot_index[shot_index] = [
-                        cell.get("asset_id") for cell in shot_cells
-                    ]
-                    desc_by_shot_index[shot_index] = {
-                        "start": shot_cells[0].get("frame_description") if len(shot_cells) > 0 else None,
-                        "middle": shot_cells[1].get("frame_description") if len(shot_cells) > 1 else None,
-                        "end": shot_cells[2].get("frame_description") if len(shot_cells) > 2 else None,
-                    }
-                    for cell in shot_cells:
-                        cell_asset_id = cell.get("asset_id")
-                        if cell_asset_id:
-                            cell_asset_ids.add(cell_asset_id)
+                storyboard_layout = str(sb_version.raw_payload.get("board_type") or "")
+                if storyboard_layout == TALKING_HEAD_LAYOUT:
+                    cfg = get_config().talking_head
+                    host_reference_urls = list(cfg.host_reference_image_assets)
+                    reference_audio_urls = list(cfg.reference_audio_assets)
+                    parent_asset_id = sb_version.raw_payload.get("parent_asset_id")
+                    if parent_asset_id:
+                        parent_asset = await asset_repo.get_by_id(parent_asset_id)
+                        story_board_url = await build_asset_access_url(parent_asset) or ""
+                    if not story_board_url:
+                        story_board_url = str(sb_version.raw_payload.get("parent_asset_url") or "")
+                    if not story_board_url:
+                        raise ClipGenerationError(
+                            "口播故事大图缺少可访问 URL，无法生成视频片段",
+                            code="missing_story_overview_board_url",
+                        )
+                    layout_reading_map = dict(sb_version.raw_payload.get("layout_reading_map") or {})
+                    for shot in sorted_shots:
+                        shot_frame_urls_map[shot.id] = [*host_reference_urls, story_board_url]
+                        shot_audio_urls_map[shot.id] = list(reference_audio_urls)
+                        shot_frame_desc_map[shot.id] = {
+                            "start": layout_reading_map.get(f"segment_{shot.shot_index + 1}"),
+                            "middle": None,
+                            "end": None,
+                        }
+                else:
+                    cell_asset_ids: set[str] = set()
+                    frames_by_shot_index: dict[int, list[str | None]] = {}
+                    desc_by_shot_index: dict[int, dict[str, str | None]] = {}
+                    for grid in (sb_version.raw_payload.get("grids") or []):
+                        grid_index = int(grid.get("grid_index") or 1)
+                        shot_index = grid_index - 1
+                        cells = sorted(
+                            (grid.get("cells") or []),
+                            key=lambda cell: int(cell.get("cell_position") or 0),
+                        )
+                        shot_cells = cells[:3]
+                        frames_by_shot_index[shot_index] = [
+                            cell.get("asset_id") for cell in shot_cells
+                        ]
+                        desc_by_shot_index[shot_index] = {
+                            "start": shot_cells[0].get("frame_description") if len(shot_cells) > 0 else None,
+                            "middle": shot_cells[1].get("frame_description") if len(shot_cells) > 1 else None,
+                            "end": shot_cells[2].get("frame_description") if len(shot_cells) > 2 else None,
+                        }
+                        for cell in shot_cells:
+                            cell_asset_id = cell.get("asset_id")
+                            if cell_asset_id:
+                                cell_asset_ids.add(cell_asset_id)
 
-                assets = await asset_repo.list_by_ids(list(cell_asset_ids))
-                asset_url_map = await build_asset_access_url_map(assets)
+                    assets = await asset_repo.list_by_ids(list(cell_asset_ids))
+                    asset_url_map = await build_asset_access_url_map(assets)
 
-                for shot in sorted_shots:
-                    ordered_asset_ids = frames_by_shot_index.get(shot.shot_index, [])
-                    shot_frame_urls_map[shot.id] = [
-                        asset_url_map.get(asset_id or "", "")
-                        for asset_id in ordered_asset_ids
-                        if asset_id
-                    ]
-                    shot_frame_desc_map[shot.id] = desc_by_shot_index.get(
-                        shot.shot_index,
-                        {"start": None, "middle": None, "end": None},
-                    )
+                    for shot in sorted_shots:
+                        ordered_asset_ids = frames_by_shot_index.get(shot.shot_index, [])
+                        shot_frame_urls_map[shot.id] = [
+                            asset_url_map.get(asset_id or "", "")
+                            for asset_id in ordered_asset_ids
+                            if asset_id
+                        ]
+                        shot_frame_desc_map[shot.id] = desc_by_shot_index.get(
+                            shot.shot_index,
+                            {"start": None, "middle": None, "end": None},
+                        )
 
         logger.info(
             f"Clip 上下文加载完成: shots={len(shots_to_process)} "
@@ -259,7 +296,11 @@ class ClipService:
                     shot=shot,
                     project_id=project_id,
                     reference_image_urls=shot_frame_urls_map.get(shot.id, []),
+                    reference_audio_urls=shot_audio_urls_map.get(shot.id, []),
                     frame_descriptions=shot_frame_desc_map.get(shot.id, {}),
+                    storyboard_layout=storyboard_layout,
+                    story_board_url=story_board_url,
+                    layout_reading_map=layout_reading_map,
                     logger=logger,
                 )
                 elapsed = round(time.monotonic() - t0, 2)
@@ -382,7 +423,11 @@ class ClipService:
         shot: Any,
         project_id: str,
         reference_image_urls: list[str],
+        reference_audio_urls: list[str],
         frame_descriptions: dict[str, str | None],
+        storyboard_layout: str,
+        story_board_url: str,
+        layout_reading_map: dict[str, Any],
         logger: Any,
     ) -> tuple[ClipVersion | None, dict[str, Any] | None]:
         """处理单个 shot：编译 video prompt → 生成 clip → 写 clip_versions。"""
@@ -391,6 +436,7 @@ class ClipService:
 
         try:
             # 决定生成模式
+            is_talking_head = storyboard_layout == TALKING_HEAD_LAYOUT
             mode = "multi_image_fusion" if len(reference_image_urls) >= 3 else ("image_to_video" if reference_image_urls else "text_to_video")
             logger.debug(
                 f"shot[{shot_index}] 生成模式: mode={mode!r} "
@@ -399,17 +445,29 @@ class ClipService:
             )
 
             async with UnitOfWork() as uow:
-                bundle = await self._compiler.compile_for_shot(
-                    session=uow.session,
-                    shot_id=shot_id,
-                    project_id=project_id,
-                    target_type="shot_clip",
-                    generation_mode=mode,
-                    start_frame_description=frame_descriptions.get("start") or shot.subject or shot.location or shot.lyric_text,
-                    middle_frame_description=frame_descriptions.get("middle"),
-                    end_frame_description=frame_descriptions.get("end"),
-                    video_reference_image_urls=reference_image_urls,
-                )
+                if is_talking_head:
+                    cfg = get_config().talking_head
+                    bundle = await self._talking_head_compiler.compile_talking_head_video(
+                        session=uow.session,
+                        project_id=project_id,
+                        shot=shot,
+                        story_board_url=story_board_url,
+                        layout_reading_map=layout_reading_map,
+                        host_reference_assets=cfg.host_reference_image_assets,
+                        reference_audio_assets=cfg.reference_audio_assets,
+                    )
+                else:
+                    bundle = await self._compiler.compile_for_shot(
+                        session=uow.session,
+                        shot_id=shot_id,
+                        project_id=project_id,
+                        target_type="shot_clip",
+                        generation_mode=mode,
+                        start_frame_description=frame_descriptions.get("start") or shot.subject or shot.location or shot.lyric_text,
+                        middle_frame_description=frame_descriptions.get("middle"),
+                        end_frame_description=frame_descriptions.get("end"),
+                        video_reference_image_urls=reference_image_urls,
+                    )
                 logger.debug(
                     f"shot[{shot_index}] video prompt 编译完成: bundle_id={bundle.bundle_id!r} "
                     f"provider={bundle.provider!r}",
@@ -424,6 +482,7 @@ class ClipService:
                 shot_index=shot_index,
                 reference_image_url=reference_image_urls[0] if reference_image_urls else None,
                 reference_image_urls=reference_image_urls,
+                reference_audio_urls=reference_audio_urls,
             )
             # 使用 provider 实际返回的视频时长； provider 未返回时回落到计划值
             duration_ms = actual_duration_ms if actual_duration_ms else (shot.duration_ms or 5000)

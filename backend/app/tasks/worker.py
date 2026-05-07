@@ -40,8 +40,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import get_config
 from app.core.logging import get_logger
 from app.core.redis_utils import get_redis_client
-from app.domain.states import TaskStatus
+from app.domain.states import ProjectStage, TaskStatus
 from app.models.workflow import ToolJob
+from app.repositories.project_repository import ProjectRepository
 from app.repositories.unit_of_work import UnitOfWork
 from app.services.state_transition_service import state_transition_service
 
@@ -1262,6 +1263,18 @@ class TaskWorker:
                 await state_transition_service.transition_tool_job(
                     uow.session, db_job, TaskStatus.FAILED, error_info=error
                 )
+                await self._mark_project_failed_for_storyboard_job(
+                    db_job,
+                    error=error,
+                    session=uow.session,
+                )
+                job = db_job
+        if session is not None:
+            await self._mark_project_failed_for_storyboard_job(
+                job,
+                error=error,
+                session=session,
+            )
         _logger.warning(
             f"ToolJob {job.id!r} 标记为 failed: {error!r}",
             event_type="worker_job_failed",
@@ -1269,6 +1282,41 @@ class TaskWorker:
 
         # 发送失败 SSE 事件，通知前端停止 spinner
         await self._emit_failure_sse(job, error)
+
+    async def _mark_project_failed_for_storyboard_job(
+        self,
+        job: ToolJob,
+        *,
+        error: dict,
+        session: AsyncSession,
+    ) -> None:
+        """分镜/故事大图任务最终失败时，同步落项目失败态，供前端进入恢复入口。"""
+        if job.tool_name != "generate_storyboard":
+            return
+
+        payload_data = job.input_payload or {}
+        project_id = payload_data.get("project_id", "")
+        if not project_id:
+            return
+
+        project = await ProjectRepository(session).get_by_id(project_id)
+        if project is None or project.current_stage == ProjectStage.FAILED.value:
+            return
+
+        try:
+            await state_transition_service.advance_project(
+                session,
+                project,
+                ProjectStage.FAILED,
+                emit_event=True,
+                correlation_id=job.id,
+            )
+        except Exception as exc:  # noqa: BLE001
+            _logger.error(
+                f"generate_storyboard 失败后项目阶段标记 failed 失败: "
+                f"project_id={project_id!r}, job_id={job.id!r}, error={error!r}, exc={exc!r}",
+                event_type="worker_project_failed_transition_error",
+            )
 
     async def _emit_failure_sse(self, job: ToolJob, error: dict) -> None:
         """若 job 属于图片生成类型，发送失败 SSE 事件通知前端。"""

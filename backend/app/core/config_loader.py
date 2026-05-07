@@ -137,6 +137,16 @@ class BillingConfig(BaseModel):
     tools: dict[str, ToolPricingConfig] = {}
 
 
+class TalkingHeadConfig(BaseModel):
+    """口播类 Production Board 链路配置。"""
+    host_reference_image_assets: list[str] = []
+    story_board_reference_image_dir: str = "data/person_pic"
+    reference_audio_assets: list[str] = []
+    story_board_aspect_ratio: str = "21:9"
+    segment_duration_sec: int = 15
+    subtitles_enabled: bool = False
+
+
 def load_yaml_config(config_path: str) -> dict[str, Any]:
     """Load YAML configuration file with environment variable substitution."""
     with open(config_path, 'r', encoding='utf-8') as f:
@@ -272,6 +282,21 @@ def load_media_config() -> MediaConfig:
     )
 
 
+def load_talking_head_config() -> TalkingHeadConfig:
+    """从 app.yaml 加载口播类业务配置。"""
+    config_path = get_config_dir() / "app.yaml"
+    data = load_yaml_config(str(config_path))
+    th_data = data.get("talking_head", {})
+    return TalkingHeadConfig(
+        host_reference_image_assets=list(th_data.get("host_reference_image_assets") or []),
+        story_board_reference_image_dir=str(th_data.get("story_board_reference_image_dir") or "data/person_pic"),
+        reference_audio_assets=list(th_data.get("reference_audio_assets") or []),
+        story_board_aspect_ratio=str(th_data.get("story_board_aspect_ratio") or "21:9"),
+        segment_duration_sec=int(th_data.get("segment_duration_sec") or 15),
+        subtitles_enabled=bool(th_data.get("subtitles_enabled", False)),
+    )
+
+
 def load_security_config() -> SecurityConfig:
     """Load JWT security configuration from app.yaml.
 
@@ -330,8 +355,8 @@ class ToAPIsConfig(BaseModel):
     api_key: str = ""
     base_url: str = "https://toapis.com"
     timeout: int = 660
-    poll_interval: int = 10
-    max_poll_attempts: int = 66
+    poll_interval: int = 7
+    max_poll_attempts: int = 100
 
 
 class ArkConfig(BaseModel):
@@ -344,7 +369,7 @@ class ArkConfig(BaseModel):
     base_url: str = "https://ark.cn-beijing.volces.com/api/v3"
     timeout: int = 660
     poll_interval: int = 15
-    max_poll_attempts: int = 50
+    max_poll_attempts: int = 100
 
 
 class ExternalApisConfig(BaseModel):
@@ -382,15 +407,15 @@ def load_external_apis_config() -> ExternalApisConfig:
             api_key=toapis_data.get("api_key", ""),
             base_url=toapis_data.get("base_url", "https://toapis.com"),
             timeout=int(toapis_data.get("timeout", 660)),
-            poll_interval=int(toapis_data.get("poll_interval", 10)),
-            max_poll_attempts=int(toapis_data.get("max_poll_attempts", 66)),
+            poll_interval=int(toapis_data.get("poll_interval", 7)),
+            max_poll_attempts=int(toapis_data.get("max_poll_attempts", 100)),
         ),
         ark=ArkConfig(
             api_key=ark_data.get("api_key", ""),
             base_url=ark_data.get("base_url", "https://ark.cn-beijing.volces.com/api/v3"),
             timeout=int(ark_data.get("timeout", 660)),
             poll_interval=int(ark_data.get("poll_interval", 15)),
-            max_poll_attempts=int(ark_data.get("max_poll_attempts", 50)),
+            max_poll_attempts=int(ark_data.get("max_poll_attempts", 100)),
         ),
     )
 

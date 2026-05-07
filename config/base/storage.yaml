@@ -18,5 +18,5 @@ storage:
   # 文件大小限制 (bytes)
   max_upload_size: 104857600  # 100MB
 
-  # 预签名 URL 过期时间 (seconds)
-  presigned_expiry: 3600
+  # 预签名 GET URL 过期时间 (seconds)，OSS 临时 URL 最长 7 天
+  presigned_expiry: 604800

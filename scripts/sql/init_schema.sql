@@ -604,7 +604,7 @@ CREATE INDEX IF NOT EXISTS idx_storyboard_frames_storyboard_shot
 CREATE TABLE IF NOT EXISTS prompt_bundles (
     id              VARCHAR(26)     NOT NULL,
     project_id      VARCHAR(26)     NOT NULL,
-    target_type     VARCHAR(32)     NOT NULL,
+    target_type     VARCHAR(128)    NOT NULL,
     target_id       VARCHAR(26)     NOT NULL,   -- 多态，无 FK
     provider        VARCHAR(64)     NOT NULL,
     positive_prompt TEXT            NOT NULL,
@@ -623,7 +623,13 @@ CREATE TABLE IF NOT EXISTS prompt_bundles (
     CONSTRAINT fk_prompt_bundles_project FOREIGN KEY (project_id)
         REFERENCES projects (id) ON DELETE CASCADE,
     CONSTRAINT ck_prompt_bundles_target_type CHECK (
-        target_type IN ('storyboard_frame', 'shot_clip', 'lipsync_clip', 'nine_grid_image')
+        target_type IN (
+            'storyboard_frame',
+            'shot_clip',
+            'lipsync_clip',
+            'nine_grid_image',
+            'talking_head_story_overview_board'
+        )
     )
 );
 

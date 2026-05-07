@@ -15,7 +15,8 @@ API 认证：
 实际生产前需用真实 API key 验证。如有偏差请调整 _SUBMIT_PATH / _QUERY_PATH。
 
 特殊参数支持：
-  params['reference_image_urls'] - 三图融合 URL 列表（起始 / 中间 / 结尾）
+  params['reference_image_urls'] - 多参考图 URL 列表
+  params['reference_audio_urls'] - 声色参考音频 URL / asset:// 列表
   reference_image_url / params['last_frame_url'] - 旧首尾帧模式兼容字段
 
 文档：docs/api/seedance2-video-generation-api.md
@@ -149,6 +150,7 @@ class SeedanceAdapter:
 
         last_frame_url: Optional[str] = merged.pop("last_frame_url", None)
         reference_image_urls: list[str] = list(merged.pop("reference_image_urls", []) or [])
+        reference_audio_urls: list[str] = list(merged.pop("reference_audio_urls", []) or [])
         if mode == "multi_image_fusion" and len(reference_image_urls) < 3:
             raise VideoGenerationError(
                 "multi_image_fusion 模式必须提供 3 张参考图（起始 / 中间 / 结尾）",
@@ -161,6 +163,7 @@ class SeedanceAdapter:
             first_frame_url=reference_image_url,
             last_frame_url=last_frame_url,
             reference_image_urls=reference_image_urls,
+            reference_audio_urls=reference_audio_urls,
             merged=merged,
         )
 
@@ -168,6 +171,7 @@ class SeedanceAdapter:
             f"Seedance 2.0 提交: model={self._model_name!r} mode={mode!r} "
             f"duration={payload['duration']}s ratio={payload['ratio']!r} "
             f"multi_ref_count={len(reference_image_urls)} "
+            f"audio_ref_count={len(reference_audio_urls)} "
             f"legacy_first_last={bool(reference_image_url or last_frame_url)} "
             f"prompt_len={len(prompt)}",
             event_type="seedance_submit",
@@ -189,6 +193,7 @@ class SeedanceAdapter:
         last_frame_url: Optional[str],
         reference_image_urls: list[str],
         merged: dict[str, Any],
+        reference_audio_urls: Optional[list[str]] = None,
     ) -> dict[str, Any]:
         """构建 Seedance 2.0 任务请求体（含 content 数组）。"""
         # content 数组：text + 多模态素材。Seedance 2.0 当前要求每个素材项显式声明 role。
@@ -197,7 +202,7 @@ class SeedanceAdapter:
         ]
 
         if mode == "multi_image_fusion":
-            for image_url in reference_image_urls[:3]:
+            for image_url in reference_image_urls:
                 content.append({
                     "type": "image_url",
                     "image_url": {"url": image_url},
@@ -216,6 +221,13 @@ class SeedanceAdapter:
                     "image_url": {"url": last_frame_url},
                     "role": "last_frame",
                 })
+
+        for audio_url in list(reference_audio_urls or []):
+            content.append({
+                "type": "audio_url",
+                "audio_url": {"url": audio_url},
+                "role": "reference_audio",
+            })
 
         return {
             "model": self._model_name,

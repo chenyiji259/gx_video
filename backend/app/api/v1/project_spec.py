@@ -11,7 +11,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, Request, status
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 from app.api.v1.deps import get_current_user, get_request_id, ok
 from app.models.user import User
@@ -35,6 +35,8 @@ router = APIRouter(
 # ---------------------------------------------------------------------------
 
 class CreateSpecVersionRequest(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+
     input_mode: str = Field(
         default="audio_text",
         description="输入模式：audio_text / audio_image_text",
@@ -106,6 +108,26 @@ class CreateSpecVersionRequest(BaseModel):
         None,
         description="三宫格生图清晰度，当前主流程固定规范化为 2K。",
     )
+    generation_profile: Optional[str] = Field(
+        None,
+        description="生成链路 profile，例如 talking_head_production_board。",
+    )
+    storyboard_layout: Optional[str] = Field(
+        None,
+        description="Storyboard 布局，例如 talking_head_story_overview_board。",
+    )
+    segment_duration_sec: Optional[int] = Field(
+        None,
+        description="口播类项目固定为 15 秒。",
+    )
+    story_board_aspect_ratio: Optional[str] = Field(
+        None,
+        description="故事大图画幅，口播类固定为 21:9。",
+    )
+    subtitles_enabled: Optional[bool] = Field(
+        None,
+        description="当前口播主链路固定 false。",
+    )
 
 
 class ActivateSpecVersionRequest(BaseModel):
@@ -156,6 +178,16 @@ async def create_spec_version(
             _output_config["video_resolution"] = body.video_resolution
         if body.image_resolution is not None:
             _output_config["image_resolution"] = body.image_resolution
+        if body.generation_profile is not None:
+            _output_config["generation_profile"] = body.generation_profile
+        if body.storyboard_layout is not None:
+            _output_config["storyboard_layout"] = body.storyboard_layout
+        if body.segment_duration_sec is not None:
+            _output_config["segment_duration_sec"] = body.segment_duration_sec
+        if body.story_board_aspect_ratio is not None:
+            _output_config["story_board_aspect_ratio"] = body.story_board_aspect_ratio
+        if body.subtitles_enabled is not None:
+            _output_config["subtitles_enabled"] = body.subtitles_enabled
         _output_config = normalize_output_config(_output_config)
         # 新流程 input_mode：有文本需求但无音频时自动切换为 text_only
         _input_mode = body.input_mode
@@ -183,6 +215,11 @@ async def create_spec_version(
         return JSONResponse(
             status_code=http_status,
             content={"success": False, "error": {"code": e.code, "message": e.message}, "request_id": req_id},
+        )
+    except ValueError as e:
+        return JSONResponse(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            content={"success": False, "error": {"code": "invalid_output_config", "message": str(e)}, "request_id": req_id},
         )
     return JSONResponse(
         status_code=status.HTTP_201_CREATED,

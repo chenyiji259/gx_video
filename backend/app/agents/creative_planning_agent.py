@@ -29,7 +29,12 @@ from app.core.config import get_config
 from app.core.logging import get_agent_logger
 from app.core.prompt_renderer import PromptRenderer
 from app.core.provider_registry import get_provider_registry
-from app.services.output_spec_service import plan_triptych_shots
+from app.services.output_spec_service import (
+    TALKING_HEAD_LAYOUT,
+    TALKING_HEAD_PROFILE,
+    plan_talking_head_segments,
+    plan_triptych_shots,
+)
 from app.tools.shared.artifact_tools import (
     read_artifact_tool,
     write_artifact,
@@ -177,6 +182,12 @@ class CreativePlanningAgent:
         video_resolution = task_spec.get("video_resolution", "1080p")
         image_resolution = task_spec.get("image_resolution", "2K")
         image_size = task_spec.get("image_size") or ""
+        generation_profile = task_spec.get("generation_profile") or ""
+        storyboard_layout = task_spec.get("storyboard_layout") or triptych_plan.get("storyboard_layout")
+        is_talking_head = (
+            generation_profile == TALKING_HEAD_PROFILE
+            or storyboard_layout == TALKING_HEAD_LAYOUT
+        )
         human_on_camera_text = "未指定"
         if human_on_camera is True:
             human_on_camera_text = "是，需要真人入镜"
@@ -191,11 +202,29 @@ class CreativePlanningAgent:
             f"目标受众：{target_audience or '未指定'}\n"
             f"视觉风格偏好：{style_pref or '未指定'}\n"
             f"当前视频模型支持的单 shot 时长档位（秒）：{', '.join(str(item) for item in allowed_shot_durations_sec)}\n"
-            f"三宫格规划：storyboard_layout=1x3_triptych，shot_count={triptych_plan.get('shot_count')}，"
-            f"grid_count={triptych_plan.get('grid_count')}，每个 shot 一张三宫格，"
-            f"shot_durations_sec={triptych_plan.get('shot_durations_sec')}，单 clip 不超过 15 秒\n"
+            + (
+                f"口播 Production Board 规划：generation_profile={TALKING_HEAD_PROFILE}，"
+                f"storyboard_layout={TALKING_HEAD_LAYOUT}，segment_duration_sec=15，"
+                f"segment_count={triptych_plan.get('segment_count')}，shot_count={triptych_plan.get('shot_count')}，"
+                f"1 张 21:9 Story Overview Board 复用给全部 15 秒 shot；当前不生成字幕，不走 TTS，参考音频只用于声色。\n"
+                if is_talking_head
+                else (
+                    f"三宫格规划：storyboard_layout=1x3_triptych，shot_count={triptych_plan.get('shot_count')}，"
+                    f"grid_count={triptych_plan.get('grid_count')}，每个 shot 一张三宫格，"
+                    f"shot_durations_sec={triptych_plan.get('shot_durations_sec')}，单 clip 不超过 15 秒\n"
+                )
+            )
+            +
             f"生成规格：video_resolution={video_resolution}，image_resolution={image_resolution}，image_size={image_size or '按画幅默认'}\n"
             f"真人入镜要求：{human_on_camera_text}\n\n"
+            + (
+                "口播角色硬约束：creative_brief.extension.character_list 必须只包含 1 个主角，"
+                "character_id='host_001'，name='50岁男性护肤专家'，appearance='50岁男性护肤专家'。"
+                "后续 brief、narrative、shot plan、storyboard 和视频 prompt 不得改写为女性、多人或其他职业身份。\n\n"
+                if is_talking_head
+                else ""
+            )
+            +
             # 旧流程（音乐MV模式）：音乐分析引用已停用
             # f"音乐分析引用：{json.dumps(audio_ref, ensure_ascii=False)}\n\n"
             # f"请先使用 read_artifact_tool 读取音乐分析引用，再生成..."
@@ -377,7 +406,12 @@ class CreativePlanningAgent:
         style_dir = task_spec.get("style_direction", "待确定")
         user_prompt = task_spec.get("user_prompt", "")
         fb = self._fallback_brief(style_dir, user_prompt)
-        triptych_plan = task_spec.get("triptych_plan") or plan_triptych_shots(float(task_spec.get("target_duration_sec") or 15))
+        generation_profile = task_spec.get("generation_profile") or ""
+        storyboard_layout = task_spec.get("storyboard_layout") or ""
+        if generation_profile == TALKING_HEAD_PROFILE or storyboard_layout == TALKING_HEAD_LAYOUT:
+            triptych_plan = task_spec.get("triptych_plan") or plan_talking_head_segments(float(task_spec.get("target_duration_sec") or 15))
+        else:
+            triptych_plan = task_spec.get("triptych_plan") or plan_triptych_shots(float(task_spec.get("target_duration_sec") or 15))
         output_extension = fb["creative_brief"]["extension"]
         output_extension.update(triptych_plan)
         output_extension["target_duration_sec"] = int(triptych_plan["target_duration_sec"])
@@ -389,6 +423,15 @@ class CreativePlanningAgent:
         output_extension["video_resolution"] = task_spec.get("video_resolution", "1080p")
         output_extension["image_resolution"] = task_spec.get("image_resolution", "2K")
         output_extension["image_size"] = task_spec.get("image_size") or "16:9"
+        if generation_profile == TALKING_HEAD_PROFILE or storyboard_layout == TALKING_HEAD_LAYOUT:
+            output_extension["character_list"] = [
+                {
+                    "character_id": "host_001",
+                    "name": "50岁男性护肤专家",
+                    "appearance": "50岁男性护肤专家",
+                    "personality": "专业、亲和、可信",
+                }
+            ]
         brief_ref = await write_artifact(
             content=fb["creative_brief"], project_id=project_id,
             artifact_type="creative_brief", version_no=version_no,

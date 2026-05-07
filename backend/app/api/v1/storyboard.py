@@ -192,6 +192,7 @@ async def get_storyboard_grids(
             )
 
         raw = version.raw_payload or {}
+        board_type = raw.get("board_type")
         grids_meta = raw.get("grids") or []
         grid_count = raw.get("grid_count") or 0
         total_shots = raw.get("total_shots") or 0
@@ -213,8 +214,8 @@ async def get_storyboard_grids(
             bundle_id = grid.get("bundle_id")
             prompt_bundle = (
                 await prompt_repo.get_latest_for_target(
-                    "nine_grid_image",
-                    f"grid_{int(grid.get('grid_index') or 0):03d}",
+                    "talking_head_story_overview_board" if grid.get("board_type") == "talking_head_story_overview_board" else "nine_grid_image",
+                    "story_overview_board" if grid.get("board_type") == "talking_head_story_overview_board" else f"grid_{int(grid.get('grid_index') or 0):03d}",
                 )
                 if grid.get("grid_index")
                 else None
@@ -252,8 +253,12 @@ async def get_storyboard_grids(
         data={
             "storyboard_version_id": version.id,
             "version_no": version.version_no,
+            "board_type": board_type,
             "grid_count": grid_count,
             "total_shots": total_shots,
+            "segment_count": raw.get("segment_count"),
+            "story_board_aspect_ratio": raw.get("story_board_aspect_ratio"),
+            "layout_reading_map": raw.get("layout_reading_map") or {},
             "grids": enriched_grids,
         },
         request_id=req_id,

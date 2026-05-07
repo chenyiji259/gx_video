@@ -1,4 +1,4 @@
-"""输出规格与三宫格规划工具。"""
+"""输出规格与 Storyboard 规划工具。"""
 from __future__ import annotations
 
 from math import ceil
@@ -9,6 +9,13 @@ from app.core.provider_registry import get_provider_registry
 SUPPORTED_VIDEO_RATIOS = {"9:16", "16:9", "1:1", "adaptive"}
 SUPPORTED_VIDEO_RESOLUTIONS = {"480p", "720p", "1080p"}
 SUPPORTED_IMAGE_RESOLUTIONS = {"1K", "2K", "4K"}
+TALKING_HEAD_PROFILE = "talking_head_production_board"
+TALKING_HEAD_LAYOUT = "talking_head_story_overview_board"
+TALKING_HEAD_SEGMENT_DURATION_SEC = 15
+TALKING_HEAD_STORY_BOARD_ASPECT_RATIO = "21:9"
+TALKING_HEAD_STORY_BOARD_IMAGE_SIZE = "21:9"
+TALKING_HEAD_STORY_BOARD_IMAGE_RESOLUTION = "4K"
+TALKING_HEAD_STYLE_PREFERENCE = "专家知识口播，专业、亲和、干净护肤科普，纯净无字幕画面"
 
 IMAGE_SIZE_BY_RATIO: dict[str, dict[str, str]] = {
     # GPT Image 2 不支持 27:16 三宫格总画幅。三宫格统一请求 16:9 + 2K，
@@ -39,6 +46,16 @@ def allowed_video_durations() -> list[int]:
     return sorted({int(v) for v in (values or [4, 5, 6, 8, 10, 12, 15])})
 
 
+def is_talking_head_config(output_config: dict[str, Any] | None) -> bool:
+    """判断输出配置是否进入口播 Production Board 主链路。"""
+    cfg = output_config or {}
+    return (
+        cfg.get("generation_profile") == TALKING_HEAD_PROFILE
+        or cfg.get("storyboard_layout") == TALKING_HEAD_LAYOUT
+        or cfg.get("content_type") == "talking_head"
+    )
+
+
 def normalize_output_config(output_config: dict[str, Any] | None) -> dict[str, Any]:
     """规范化从需求入口传入的输出规格，作为后续生成和合成的唯一契约。"""
     cfg = dict(output_config or {})
@@ -63,6 +80,15 @@ def normalize_output_config(output_config: dict[str, Any] | None) -> dict[str, A
         target_duration_sec = 15.0
     target_duration_sec = max(4.0, min(target_duration_sec, 600.0))
 
+    if is_talking_head_config(cfg):
+        return normalize_talking_head_output_config(
+            cfg,
+            target_duration_sec=target_duration_sec,
+            aspect_ratio=ratio,
+            video_resolution=video_resolution,
+            image_resolution=image_resolution,
+        )
+
     image_grid = resolve_triptych_image_spec(ratio)
     if image_resolution != image_grid["resolution"]:
         # 当前三宫格使用像素尺寸直传，保持 2K 以避免切分后 cell 低于视频生成质量要求。
@@ -79,6 +105,56 @@ def normalize_output_config(output_config: dict[str, Any] | None) -> dict[str, A
             "grid_rows": 1,
             "image_size": image_grid["size"],
             "image_orientation": image_grid["orientation"],
+        }
+    )
+    return cfg
+
+
+def normalize_talking_head_output_config(
+    cfg: dict[str, Any],
+    *,
+    target_duration_sec: float,
+    aspect_ratio: str,
+    video_resolution: str,
+    image_resolution: str,
+) -> dict[str, Any]:
+    """规范化口播类项目规格，强制 15 秒 segment 和 21:9 故事大图。"""
+    target_total = int(round(target_duration_sec))
+    if target_total < TALKING_HEAD_SEGMENT_DURATION_SEC:
+        raise ValueError("口播类视频 target_duration_sec 必须至少为 15 秒")
+    if target_total % TALKING_HEAD_SEGMENT_DURATION_SEC != 0:
+        raise ValueError("口播类视频 target_duration_sec 必须是 15 秒的整数倍")
+
+    segment_duration = int(cfg.get("segment_duration_sec") or TALKING_HEAD_SEGMENT_DURATION_SEC)
+    if segment_duration != TALKING_HEAD_SEGMENT_DURATION_SEC:
+        raise ValueError("口播类视频 segment_duration_sec 必须等于 15")
+
+    story_board_aspect_ratio = str(
+        cfg.get("story_board_aspect_ratio") or TALKING_HEAD_STORY_BOARD_ASPECT_RATIO
+    ).strip()
+    if story_board_aspect_ratio != TALKING_HEAD_STORY_BOARD_ASPECT_RATIO:
+        raise ValueError("口播类故事大图 story_board_aspect_ratio 必须是 21:9")
+
+    cfg.update(
+        {
+            "generation_profile": TALKING_HEAD_PROFILE,
+            "content_type": "talking_head",
+            "target_duration_sec": target_total,
+            "segment_duration_sec": TALKING_HEAD_SEGMENT_DURATION_SEC,
+            "segment_count": target_total // TALKING_HEAD_SEGMENT_DURATION_SEC,
+            "shot_count": target_total // TALKING_HEAD_SEGMENT_DURATION_SEC,
+            "grid_count": 1,
+            "total_shots_generated": target_total // TALKING_HEAD_SEGMENT_DURATION_SEC,
+            "storyboard_layout": TALKING_HEAD_LAYOUT,
+            "story_board_aspect_ratio": story_board_aspect_ratio,
+            "story_board_image_size": TALKING_HEAD_STORY_BOARD_IMAGE_SIZE,
+            "story_board_image_resolution": TALKING_HEAD_STORY_BOARD_IMAGE_RESOLUTION,
+            "aspect_ratio": aspect_ratio,
+            "video_resolution": video_resolution,
+            "image_resolution": image_resolution if image_resolution in SUPPORTED_IMAGE_RESOLUTIONS else "2K",
+            "style_preference": TALKING_HEAD_STYLE_PREFERENCE,
+            "subtitles_enabled": False,
+            "human_on_camera": True if cfg.get("human_on_camera") is None else bool(cfg.get("human_on_camera")),
         }
     )
     return cfg
@@ -146,4 +222,32 @@ def plan_triptych_shots(target_duration_sec: float) -> dict[str, Any]:
         "allowed_shot_durations_sec": durations,
         "max_clip_duration_sec": max_duration,
         "storyboard_layout": "1x3_triptych",
+    }
+
+
+def plan_talking_head_segments(target_duration_sec: float) -> dict[str, Any]:
+    """按 15 秒硬边界规划口播 segment / shot / clip。"""
+    target_total = int(round(target_duration_sec or 0))
+    if target_total < TALKING_HEAD_SEGMENT_DURATION_SEC:
+        raise ValueError("口播类视频 target_duration_sec 必须至少为 15 秒")
+    if target_total % TALKING_HEAD_SEGMENT_DURATION_SEC != 0:
+        raise ValueError("口播类视频 target_duration_sec 必须是 15 秒的整数倍")
+    count = target_total // TALKING_HEAD_SEGMENT_DURATION_SEC
+    return {
+        "target_duration_sec": target_total,
+        "shot_duration_sec": TALKING_HEAD_SEGMENT_DURATION_SEC,
+        "shot_durations_sec": [TALKING_HEAD_SEGMENT_DURATION_SEC] * count,
+        "shot_count": count,
+        "grid_count": 1,
+        "segment_count": count,
+        "segment_duration_sec": TALKING_HEAD_SEGMENT_DURATION_SEC,
+        "total_shots_generated": count,
+        "allowed_shot_durations_sec": [TALKING_HEAD_SEGMENT_DURATION_SEC],
+        "max_clip_duration_sec": TALKING_HEAD_SEGMENT_DURATION_SEC,
+        "storyboard_layout": TALKING_HEAD_LAYOUT,
+        "generation_profile": TALKING_HEAD_PROFILE,
+        "story_board_aspect_ratio": TALKING_HEAD_STORY_BOARD_ASPECT_RATIO,
+        "story_board_image_size": TALKING_HEAD_STORY_BOARD_IMAGE_SIZE,
+        "story_board_image_resolution": TALKING_HEAD_STORY_BOARD_IMAGE_RESOLUTION,
+        "subtitles_enabled": False,
     }

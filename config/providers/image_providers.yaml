@@ -27,9 +27,10 @@ image_providers:
     capabilities:
       max_width: 3840
       max_height: 3840
-      # ToApis GPT Image 2 支持的合法比例子集，三宫格固定使用 16:9。
+      # ToApis GPT Image 2 支持的合法比例子集；三宫格固定 16:9，口播故事大图使用 21:9。
       supported_sizes:
         - "16:9"
+        - "21:9"
       resolution: "2K"
       supports_negative_prompt: false
       supports_reference_image: true

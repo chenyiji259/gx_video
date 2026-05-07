@@ -20,11 +20,13 @@ from app.utils.ids import generate_ulid
 
 # target_type 枚举，对应 prompt_bundles 表的约束（doc 05 §12.1）
 # doc 21 九宫格架构新增 nine_grid_image，用于九宫格大图生图 prompt。
+# doc 27/28 口播链路新增 talking_head_story_overview_board，用于 21:9 故事大图 prompt。
 PromptTargetType = Literal[
     "storyboard_frame",
     "shot_clip",
     "lipsync_clip",
     "nine_grid_image",
+    "talking_head_story_overview_board",
 ]
 
 
@@ -35,7 +37,7 @@ class PromptBundle(BaseModel):
     """
     bundle_id: str = Field(default_factory=generate_ulid)
 
-    # 目标类型：storyboard_frame / shot_clip / lipsync_clip / nine_grid_image
+    # 目标类型：storyboard_frame / shot_clip / lipsync_clip / nine_grid_image / talking_head_story_overview_board
     target_type: PromptTargetType
 
     # 目标对象 ID（storyboard_frame.id / shot.id / grid_XXX）
@@ -61,6 +63,8 @@ class PromptBundle(BaseModel):
     # 有值时 ImageGenerationTool 优先使用此字段（多参考图模式），
     # 否则回落到 reference_image_url（单图模式）。
     reference_image_urls: list[str] = Field(default_factory=list)
+    # 口播链路：Seedance reference_audio 声色参考资产 URL / asset:// 列表。
+    reference_audio_urls: list[str] = Field(default_factory=list)
     # reference_weight: img2img 参考强度（0.0-1.0），默认 0.75
     reference_weight: float = 0.75
 

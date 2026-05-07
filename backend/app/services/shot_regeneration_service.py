@@ -19,6 +19,7 @@ from typing import Any, Optional
 
 import redis.asyncio as aioredis
 
+from app.core.config import get_config
 from app.core.logging import get_project_logger
 from app.core.redis_utils import build_redis_url
 from app.domain.states import ProjectStage
@@ -42,8 +43,10 @@ from app.repositories.unit_of_work import UnitOfWork
 from app.services.cost_estimation_service import CostEstimationService
 from app.services.concurrency_guard_service import ConcurrencyError, concurrency_guard
 from app.services.asset_access_service import build_asset_access_url
+from app.services.output_spec_service import TALKING_HEAD_LAYOUT
 from app.services.prompt_compiler_service import PromptCompilerError, PromptCompilerService
 from app.services.state_transition_service import state_transition_service
+from app.services.talking_head_prompt_service import TalkingHeadPromptService
 from app.storage.local_artifact_store import LocalArtifactStore
 from app.storage.path_planner import ArtifactStage
 from app.tools.video_generation_tool import VideoGenerationTool
@@ -84,6 +87,7 @@ class ShotRegenerationService:
 
     def __init__(self) -> None:
         self._compiler = PromptCompilerService()
+        self._talking_head_compiler = TalkingHeadPromptService()
         self._video_tool = VideoGenerationTool()
         self._cost_svc = CostEstimationService()
         self._idem_redis: aioredis.Redis | None = None
@@ -155,9 +159,14 @@ class ShotRegenerationService:
             idem_locked = True
 
         # ---- 步骤 1: 读取并校验上下文 ----------------------------------------
-        shot, reference_image_urls = await self._load_and_validate(
+        shot, regen_context = await self._load_and_validate(
             project_id, shot_id, user_id
         )
+        reference_image_urls = regen_context["reference_image_urls"]
+        reference_audio_urls = regen_context["reference_audio_urls"]
+        storyboard_layout = regen_context["storyboard_layout"]
+        story_board_url = regen_context["story_board_url"]
+        layout_reading_map = regen_context["layout_reading_map"]
         mode = "multi_image_fusion" if len(reference_image_urls) >= 3 else ("image_to_video" if reference_image_urls else "text_to_video")
         logger.info(
             f"单镜头重生成开始: shot_id={shot_id!r} mode={mode!r} "
@@ -176,6 +185,10 @@ class ShotRegenerationService:
                     user_id=user_id,
                     mode=mode,
                     reference_image_urls=reference_image_urls,
+                    reference_audio_urls=reference_audio_urls,
+                    storyboard_layout=storyboard_layout,
+                    story_board_url=story_board_url,
+                    layout_reading_map=layout_reading_map,
                     idem_locked=idem_locked,
                     idempotency_key=idempotency_key,
                     logger=logger,
@@ -194,6 +207,10 @@ class ShotRegenerationService:
         user_id: str,
         mode: str,
         reference_image_urls: list[str],
+        reference_audio_urls: list[str],
+        storyboard_layout: str,
+        story_board_url: str,
+        layout_reading_map: dict[str, Any],
         idem_locked: bool,
         idempotency_key: str | None,
         logger: Any,
@@ -203,14 +220,26 @@ class ShotRegenerationService:
         # ---- 步骤 2: 编译 PromptBundle ----------------------------------------
         try:
             async with UnitOfWork() as uow:
-                bundle = await self._compiler.compile_for_shot(
-                    session=uow.session,
-                    shot_id=shot_id,
-                    project_id=project_id,
-                    target_type="shot_clip",
-                    generation_mode=mode,
-                    video_reference_image_urls=reference_image_urls,
-                )
+                if storyboard_layout == TALKING_HEAD_LAYOUT:
+                    cfg = get_config().talking_head
+                    bundle = await self._talking_head_compiler.compile_talking_head_video(
+                        session=uow.session,
+                        project_id=project_id,
+                        shot=shot,
+                        story_board_url=story_board_url,
+                        layout_reading_map=layout_reading_map,
+                        host_reference_assets=cfg.host_reference_image_assets,
+                        reference_audio_assets=cfg.reference_audio_assets,
+                    )
+                else:
+                    bundle = await self._compiler.compile_for_shot(
+                        session=uow.session,
+                        shot_id=shot_id,
+                        project_id=project_id,
+                        target_type="shot_clip",
+                        generation_mode=mode,
+                        video_reference_image_urls=reference_image_urls,
+                    )
         except PromptCompilerError as exc:
             if idem_locked:
                 await self._release_idempotency_key(idempotency_key)  # type: ignore[arg-type]
@@ -227,6 +256,7 @@ class ShotRegenerationService:
                 shot_index=shot.shot_index,
                 reference_image_url=reference_image_urls[0] if reference_image_urls else None,
                 reference_image_urls=reference_image_urls,
+                reference_audio_urls=reference_audio_urls,
             )
         except VideoGenerationError:
             if idem_locked:
@@ -342,11 +372,11 @@ class ShotRegenerationService:
         project_id: str,
         shot_id: str,
         user_id: str,
-    ) -> tuple[Any, list[str]]:
+    ) -> tuple[Any, dict[str, Any]]:
         """校验项目/shot 归属，加载 storyboard frame URL 列表。
 
         Returns:
-            (shot ORM 对象, reference_image_urls)
+            (shot ORM 对象, 重生成上下文)
         """
         async with UnitOfWork() as uow:
             session = uow.session
@@ -372,18 +402,48 @@ class ShotRegenerationService:
 
             # 查找 active storyboard frame（作为 image_to_video 参考帧）
             reference_image_urls: list[str] = []
+            reference_audio_urls: list[str] = []
+            storyboard_layout = ""
+            story_board_url = ""
+            layout_reading_map: dict[str, Any] = {}
             sb_version = await StoryboardVersionRepository(session).get_active(project_id)
             if sb_version:
-                frames = await StoryboardFrameRepository(session).list_by_shot(
-                    sb_version.id, shot_id
-                )
-                for frame in frames:
-                    asset = await AssetRepository(session).get_by_id(frame.asset_id)
-                    asset_url = await build_asset_access_url(asset)
-                    if asset_url:
-                        reference_image_urls.append(asset_url)
+                raw = sb_version.raw_payload or {}
+                storyboard_layout = str(raw.get("board_type") or "")
+                if storyboard_layout == TALKING_HEAD_LAYOUT:
+                    cfg = get_config().talking_head
+                    reference_image_urls = list(cfg.host_reference_image_assets)
+                    reference_audio_urls = list(cfg.reference_audio_assets)
+                    parent_asset_id = raw.get("parent_asset_id")
+                    if parent_asset_id:
+                        parent_asset = await AssetRepository(session).get_by_id(parent_asset_id)
+                        story_board_url = await build_asset_access_url(parent_asset) or ""
+                    if not story_board_url:
+                        story_board_url = str(raw.get("parent_asset_url") or "")
+                    if not story_board_url:
+                        raise ShotRegenerationError(
+                            "口播故事大图缺少可访问 URL，无法重生成当前镜头",
+                            code="missing_story_overview_board_url",
+                        )
+                    reference_image_urls.append(story_board_url)
+                    layout_reading_map = dict(raw.get("layout_reading_map") or {})
+                else:
+                    frames = await StoryboardFrameRepository(session).list_by_shot(
+                        sb_version.id, shot_id
+                    )
+                    for frame in frames:
+                        asset = await AssetRepository(session).get_by_id(frame.asset_id)
+                        asset_url = await build_asset_access_url(asset)
+                        if asset_url:
+                            reference_image_urls.append(asset_url)
 
-        return shot, reference_image_urls
+        return shot, {
+            "reference_image_urls": reference_image_urls,
+            "reference_audio_urls": reference_audio_urls,
+            "storyboard_layout": storyboard_layout,
+            "story_board_url": story_board_url,
+            "layout_reading_map": layout_reading_map,
+        }
 
     # ------------------------------------------------------------------
     # 辅助：落库 ClipVersion

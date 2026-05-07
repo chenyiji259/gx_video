@@ -63,15 +63,29 @@ class ShotPatchRequest(BaseModel):
 
 def _shot_to_dict(shot: object) -> dict:
     """Shot ORM 对象 → API 响应 dict。"""
+    shot_index = getattr(shot, "shot_index", None)
+    start_ms = getattr(shot, "start_ms", None)
+    end_ms = getattr(shot, "end_ms", None)
     return {
         "id": getattr(shot, "id", None),
         "project_id": getattr(shot, "project_id", None),
         "shot_plan_version_id": getattr(shot, "shot_plan_version_id", None),
         "scene_id": getattr(shot, "scene_id", None),
-        "shot_index": getattr(shot, "shot_index", None),
-        "start_ms": getattr(shot, "start_ms", None),
-        "end_ms": getattr(shot, "end_ms", None),
+        "shot_index": shot_index,
+        "start_ms": start_ms,
+        "end_ms": end_ms,
         "duration_ms": getattr(shot, "duration_ms", None),
+        "segment_index": (int(shot_index) + 1) if shot_index is not None else None,
+        "segment_time_range": (
+            f"{int(start_ms or 0) // 1000}-{int(end_ms or 0) // 1000}s"
+            if start_ms is not None and end_ms is not None
+            else None
+        ),
+        "story_board_segment_label": (
+            f"Segment {int(shot_index) + 1}"
+            if shot_index is not None
+            else None
+        ),
         "section_type": getattr(shot, "section_type", None),
         "lyric_text": getattr(shot, "lyric_text", None),
         "dialogue": getattr(shot, "dialogue", None),

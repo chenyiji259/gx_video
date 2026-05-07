@@ -28,6 +28,7 @@ from app.core.config_loader import (
     RedisConfig,
     SecurityConfig,
     StorageConfig,
+    TalkingHeadConfig,
     WorkflowConfig,
     load_app_config,
     load_billing_config,
@@ -38,6 +39,7 @@ from app.core.config_loader import (
     load_redis_config,
     load_security_config,
     load_storage_config,
+    load_talking_head_config,
     load_workflow_config,
 )
 
@@ -58,6 +60,7 @@ class VidMuseConfig:
     security: SecurityConfig
     llm: LLMConfig
     external_apis: ExternalApisConfig
+    talking_head: TalkingHeadConfig
 
 
 @lru_cache(maxsize=1)
@@ -80,4 +83,5 @@ def get_config() -> VidMuseConfig:
         security=load_security_config(),
         llm=load_llm_config(),
         external_apis=load_external_apis_config(),
+        talking_head=load_talking_head_config(),
     )

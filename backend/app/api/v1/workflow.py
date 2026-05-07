@@ -23,6 +23,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from app.api.v1.deps import get_current_user, get_request_id, ok
+from app.domain.states import ProjectStage
 from app.models.user import User
 from app.repositories.decision_repository import DecisionRepository
 from app.repositories.project_repository import ProjectRepository
@@ -60,6 +61,7 @@ from app.services.director_report_service import director_report_service
 from app.services.conversation_service import ConversationService
 from app.services.decision_service import DecisionService
 from app.services.event_log_service import event_log_service
+from app.services.state_transition_service import state_transition_service
 from app.schemas.event import ProjectEvent
 
 from app.core.logging import get_logger
@@ -693,6 +695,21 @@ async def trigger_generate_storyboard(
 
     try:
         async with UnitOfWork() as uow:
+            project_for_dispatch = await ProjectRepository(uow.session).get_by_id_for_user(
+                project_id, str(current_user.id)
+            )
+            if project_for_dispatch is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail={"code": "project_not_found", "message": "项目不存在"},
+                )
+            if project_for_dispatch.current_stage == ProjectStage.FAILED.value:
+                await state_transition_service.advance_project(
+                    uow.session,
+                    project_for_dispatch,
+                    ProjectStage.SHOT_PLAN_READY,
+                    emit_event=True,
+                )
             job, is_new = await task_dispatcher.dispatch(
                 uow.session,
                 project_id=project_id,

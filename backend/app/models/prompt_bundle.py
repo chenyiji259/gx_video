@@ -20,7 +20,10 @@ from app.models.base import Base, CreatedAtMixin, ULIDMixin
 
 
 # target_type 约束（同 schemas/prompt.py PromptTargetType）
-_TARGET_TYPE_VALUES = "('storyboard_frame', 'shot_clip', 'lipsync_clip', 'nine_grid_image')"
+_TARGET_TYPE_VALUES = (
+    "('storyboard_frame', 'shot_clip', 'lipsync_clip', "
+    "'nine_grid_image', 'talking_head_story_overview_board')"
+)
 
 
 class PromptBundleModel(ULIDMixin, CreatedAtMixin, Base):
@@ -52,8 +55,8 @@ class PromptBundleModel(ULIDMixin, CreatedAtMixin, Base):
     # ------------------------------------------------------------------ #
     # 目标标识
     # ------------------------------------------------------------------ #
-    # 目标类型：storyboard_frame / shot_clip / lipsync_clip / nine_grid_image
-    target_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    # 目标类型：storyboard_frame / shot_clip / lipsync_clip / nine_grid_image / talking_head_story_overview_board
+    target_type: Mapped[str] = mapped_column(String(128), nullable=False)
     # 目标 ID（多态，无 FK）
     target_id: Mapped[str] = mapped_column(String(26), nullable=False)
 

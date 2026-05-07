@@ -20,6 +20,7 @@ from __future__ import annotations
 import time
 from typing import Any
 
+from app.core.config import get_config
 from app.core.logging import get_project_logger
 from app.domain.states import ProjectStage
 from app.models.storyboard import StoryboardFrame, StoryboardVersion
@@ -42,9 +43,14 @@ from app.schemas.project import CreativeBriefExtension
 from app.services.asset_access_service import build_asset_access_url, build_asset_access_url_map
 from app.services.concurrency_guard_service import ConcurrencyError, concurrency_guard
 from app.services.event_log_service import event_log_service
+from app.services.output_spec_service import (
+    TALKING_HEAD_LAYOUT,
+    TALKING_HEAD_STORY_BOARD_IMAGE_RESOLUTION,
+)
 from app.services.prompt_compiler_service import PromptCompilerService
 from app.services.shot_plan_persistence_service import ShotPlanPersistenceService
 from app.services.state_transition_service import state_transition_service
+from app.services.talking_head_prompt_service import TalkingHeadPromptService, segment_time_range
 from app.storage.local_artifact_store import LocalArtifactStore
 from app.storage.path_planner import ArtifactStage
 from app.tools.image_generation_tool import ImageGenerationTool
@@ -72,6 +78,7 @@ class StoryboardService:
 
     def __init__(self) -> None:
         self._compiler = PromptCompilerService()
+        self._talking_head_compiler = TalkingHeadPromptService()
         self._image_tool = ImageGenerationTool()
         self._shot_plan_service = ShotPlanPersistenceService()
 
@@ -146,6 +153,14 @@ class StoryboardService:
                     f"brief.raw_payload.extension 字段无效: {exc}",
                     code="invalid_extension",
                 ) from exc
+            if ext.storyboard_layout == TALKING_HEAD_LAYOUT:
+                return await self._generate_talking_head_story_overview(
+                    project_id=project_id,
+                    user_id=user_id,
+                    project=project,
+                    ext=ext,
+                    logger=logger,
+                )
             if ext.storyboard_layout != "1x3_triptych" or ext.grid_count != max(1, ext.total_shots_generated):
                 ext = ext.model_copy(
                     update={
@@ -318,6 +333,259 @@ class StoryboardService:
             f"三宫格 storyboard 生成完成: version={version_no} grids={grid_count} "
             f"total_shots={total_shots}",
             event_type="storyboard_generation_done",
+        )
+        return storyboard_version
+
+    async def _generate_talking_head_story_overview(
+        self,
+        *,
+        project_id: str,
+        user_id: str,
+        project: Any,
+        ext: CreativeBriefExtension,
+        logger: Any,
+    ) -> StoryboardVersion:
+        """口播链路：生成 1 张 Story Overview Board，不切三宫格 cell。"""
+        async with UnitOfWork() as uow:
+            shot_plan = await ShotPlanRepository(uow.session).get_active(project_id)
+
+        if shot_plan is None:
+            logger.info(
+                "未找到 active shot_plan，从 narrative_script 自动派生口播 segment shots",
+                event_type="storyboard_talking_head_derive_shot_plan",
+            )
+            _, shot_plan_obj, _ = await self._shot_plan_service.derive_from_narrative(
+                project_id, user_id,
+            )
+            shot_plan_version_id = shot_plan_obj.id
+        else:
+            shot_plan_version_id = shot_plan.id
+
+        async with UnitOfWork() as uow:
+            all_shots = await ShotRepository(uow.session).list_by_project(project_id)
+        all_shots = sorted(all_shots, key=lambda s: s.shot_index)
+        total_shots = max(ext.total_shots_generated, len(all_shots))
+        segment_count = total_shots
+
+        logger.info(
+            f"口播 Story Overview Board 生成开始: segment_count={segment_count}",
+            event_type="storyboard_story_overview_start",
+        )
+
+        async with UnitOfWork() as uow:
+            sv_repo = StoryboardVersionRepository(uow.session)
+            await sv_repo.deactivate_all(project_id)
+            version_no = await sv_repo.get_next_version_no(project_id)
+            storyboard_version = StoryboardVersion(
+                project_id=project_id,
+                version_no=version_no,
+                shot_plan_version_id=shot_plan_version_id,
+                raw_payload={
+                    "board_type": TALKING_HEAD_LAYOUT,
+                    "grid_count": 1,
+                    "total_shots": total_shots,
+                    "segment_count": segment_count,
+                    "story_board_aspect_ratio": "21:9",
+                    "story_board_image_resolution": TALKING_HEAD_STORY_BOARD_IMAGE_RESOLUTION,
+                    "grids": [],
+                },
+                is_active=True,
+            )
+            await sv_repo.add(storyboard_version)
+            await uow.flush()
+            await uow.session.refresh(storyboard_version)
+            sb_version_id = storyboard_version.id
+
+        cfg = get_config().talking_head
+        async with UnitOfWork() as uow:
+            bundle = await self._talking_head_compiler.compile_story_overview_board(
+                uow.session,
+                project_id,
+                host_reference_assets=cfg.host_reference_image_assets,
+                reference_audio_assets=cfg.reference_audio_assets,
+            )
+            await event_log_service.emit(
+                uow.session,
+                ProjectEvent(
+                    project_id=project_id,
+                    aggregate_type="project",
+                    aggregate_id=project_id,
+                    event_type="storyboard.story_overview.generating",
+                    category="domain",
+                    payload={
+                        "bundle_id": bundle.bundle_id,
+                        "segment_count": segment_count,
+                        "story_board_aspect_ratio": "21:9",
+                        "story_board_image_resolution": TALKING_HEAD_STORY_BOARD_IMAGE_RESOLUTION,
+                        "message": "口播故事大图生成中…",
+                    },
+                ),
+            )
+
+        try:
+            parent_asset_id = await self._image_tool.generate_for_bundle(
+                bundle=bundle,
+                project_id=project_id,
+                shot_index=None,
+            )
+        except ImageGenerationError as exc:
+            logger.warning(
+                f"口播故事大图生成失败: {exc}",
+                event_type="storyboard_story_overview_failed",
+            )
+            raise StoryboardGenerationError(
+                f"口播故事大图生成失败: {exc.message}",
+                code="story_overview_generation_failed",
+            ) from exc
+
+        async with UnitOfWork() as uow:
+            asset = await AssetRepository(uow.session).get_by_id(parent_asset_id)
+            parent_url = await build_asset_access_url(asset) or ""
+            layout_reading_map = dict(bundle.params.get("layout_reading_map") or {})
+            if not layout_reading_map:
+                layout_reading_map = {
+                    f"segment_{idx + 1}": f"只读取故事大图中 Segment {idx + 1} / {segment_time_range(idx)} 区域"
+                    for idx in range(segment_count)
+                }
+            segments = [
+                {
+                    "segment_index": idx + 1,
+                    "shot_index": idx,
+                    "time_range": segment_time_range(idx),
+                    "reading_instruction": layout_reading_map.get(f"segment_{idx + 1}"),
+                }
+                for idx in range(segment_count)
+            ]
+            grid_meta = {
+                "grid_index": 1,
+                "board_type": TALKING_HEAD_LAYOUT,
+                "parent_asset_id": parent_asset_id,
+                "parent_asset_url": parent_url,
+                "bundle_id": bundle.bundle_id,
+                "prompt_preview": bundle.positive_prompt,
+                "cell_count": 0,
+                "cells": [],
+                "layout_reading_map": layout_reading_map,
+                "story_board_aspect_ratio": "21:9",
+                "story_board_image_resolution": TALKING_HEAD_STORY_BOARD_IMAGE_RESOLUTION,
+                "segment_count": segment_count,
+                "segments": segments,
+            }
+
+            frame_repo = StoryboardFrameRepository(uow.session)
+            await frame_repo.bulk_add([
+                StoryboardFrame(
+                    project_id=project_id,
+                    storyboard_version_id=sb_version_id,
+                    shot_id=None,
+                    asset_id=parent_asset_id,
+                    prompt_bundle_id=bundle.bundle_id,
+                    frame_index=100,
+                    metadata_={
+                        "is_story_overview_board": True,
+                        "board_type": TALKING_HEAD_LAYOUT,
+                        "layout_reading_map": layout_reading_map,
+                        "segment_count": segment_count,
+                        "story_board_image_resolution": TALKING_HEAD_STORY_BOARD_IMAGE_RESOLUTION,
+                    },
+                    parent_asset_id=None,
+                    cell_position=None,
+                    grid_index=1,
+                )
+            ])
+
+            shot_repo = ShotRepository(uow.session)
+            for shot in all_shots:
+                shot_orm = await shot_repo.get_by_id(shot.id)
+                if shot_orm is not None:
+                    shot_orm.status = "storyboard_ready"
+                    uow.session.add(shot_orm)
+
+            project_orm = await ProjectRepository(uow.session).get_by_id(project_id)
+            project_orm.active_storyboard_version_id = sb_version_id
+            uow.session.add(project_orm)
+            sv = await StoryboardVersionRepository(uow.session).get_by_id(sb_version_id)
+            sv.raw_payload = {
+                "board_type": TALKING_HEAD_LAYOUT,
+                "grid_count": 1,
+                "total_shots": total_shots,
+                "segment_count": segment_count,
+                "story_board_aspect_ratio": "21:9",
+                "story_board_image_resolution": TALKING_HEAD_STORY_BOARD_IMAGE_RESOLUTION,
+                "parent_asset_id": parent_asset_id,
+                "parent_asset_url": parent_url,
+                "layout_reading_map": layout_reading_map,
+                "segments": segments,
+                "grids": [grid_meta],
+            }
+            uow.session.add(sv)
+
+            if project_orm.current_stage != ProjectStage.STORYBOARD_READY.value:
+                await state_transition_service.advance_project(
+                    uow.session, project_orm, ProjectStage.STORYBOARD_READY,
+                )
+            await event_log_service.emit(
+                uow.session,
+                ProjectEvent(
+                    project_id=project_id,
+                    aggregate_type="project",
+                    aggregate_id=project_id,
+                    event_type="storyboard.story_overview.ready",
+                    category="domain",
+                    payload={
+                        "board_type": TALKING_HEAD_LAYOUT,
+                        "parent_asset_id": parent_asset_id,
+                        "asset_url": parent_url,
+                        "segment_count": segment_count,
+                        "story_board_image_resolution": TALKING_HEAD_STORY_BOARD_IMAGE_RESOLUTION,
+                        "storyboard_version_id": sb_version_id,
+                    },
+                ),
+            )
+            await event_log_service.emit(
+                uow.session,
+                ProjectEvent(
+                    project_id=project_id,
+                    aggregate_type="project",
+                    aggregate_id=project_id,
+                    event_type="storyboard.all_grids_completed",
+                    category="domain",
+                    payload={
+                        "grid_count": 1,
+                        "total_frames": 1,
+                        "shot_count": total_shots,
+                        "storyboard_version_id": sb_version_id,
+                        "board_type": TALKING_HEAD_LAYOUT,
+                    },
+                ),
+            )
+
+        try:
+            LocalArtifactStore(project_id).write_json(
+                ArtifactStage.STORYBOARD,
+                "storyboard",
+                {
+                    "version_id": sb_version_id,
+                    "version_no": version_no,
+                    "shot_plan_version_id": shot_plan_version_id,
+                    "board_type": TALKING_HEAD_LAYOUT,
+                    "grid_count": 1,
+                    "total_shots": total_shots,
+                    "segment_count": segment_count,
+                    "story_board_image_resolution": TALKING_HEAD_STORY_BOARD_IMAGE_RESOLUTION,
+                    "grids": [grid_meta],
+                },
+                version=version_no,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                f"口播 storyboard 本地快照写入失败（不影响业务）: {exc}",
+                event_type="storyboard_local_snapshot_failed",
+            )
+
+        logger.info(
+            f"口播 Story Overview Board 生成完成: version={version_no} asset={parent_asset_id!r}",
+            event_type="storyboard_story_overview_done",
         )
         return storyboard_version
 

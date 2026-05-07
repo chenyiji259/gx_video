@@ -50,6 +50,7 @@ class VideoGenerationTool:
         shot_index: Optional[int] = None,
         reference_image_url: Optional[str] = None,
         reference_image_urls: Optional[list[str]] = None,
+        reference_audio_urls: Optional[list[str]] = None,
         last_frame_url: Optional[str] = None,
     ) -> tuple[str, Optional[int]]:
         """为 PromptBundle 生成视频并落库。
@@ -61,6 +62,7 @@ class VideoGenerationTool:
             shot_index:           镜头序号（用于日志输出，可选）。
             reference_image_url:  旧兼容 image_to_video 模式下的起始帧 URL。
             reference_image_urls: 多图融合模式下的有序参考图 URL 列表。
+            reference_audio_urls: 声色参考音频 URL / asset:// 列表。
             last_frame_url:       旧兼容 image_to_video 模式下的尾帧 URL。
 
         Returns:
@@ -85,6 +87,8 @@ class VideoGenerationTool:
         params = dict(bundle.params or {})
         if reference_image_urls:
             params["reference_image_urls"] = list(reference_image_urls)
+        if reference_audio_urls:
+            params["reference_audio_urls"] = list(reference_audio_urls)
         if last_frame_url:
             params["last_frame_url"] = last_frame_url
         requested_duration_sec = params.get("duration_sec")
@@ -188,6 +192,8 @@ class VideoGenerationTool:
                     "duration_ms": duration_ms,
                     "requested_duration_sec": requested_duration_sec,
                     "normalized_duration_sec": params.get("duration_sec"),
+                    "reference_image_urls": list(reference_image_urls or []),
+                    "reference_audio_urls": list(reference_audio_urls or []),
                     "original_url": result.video_url,
                     "external_task_id": external_task_id,
                 },

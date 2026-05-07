@@ -48,6 +48,12 @@ from app.repositories.visual_bible_repository import (
     NarrativeScriptVersionRepository,
 )
 # from app.services.brief_persistence_service import _quality_summary_to_text  # 旧流程：已停用
+from app.services.output_spec_service import is_talking_head_config
+from app.services.shot_plan_duration_service import (
+    ShotPlanDurationError,
+    apply_talking_head_duration_plan,
+    build_talking_head_scene_plan,
+)
 from app.services.state_transition_service import state_transition_service
 from app.storage.local_artifact_store import LocalArtifactStore
 from app.storage.path_planner import ArtifactStage
@@ -864,6 +870,9 @@ class ShotPlanPersistenceService:
         proj_repo = ProjectRepository(session)
 
         project = await proj_repo.get_by_id(project_id)
+        spec = await ProjectSpecRepository(session).get_active(project_id)
+        output_config = spec.output_config or {} if spec is not None else {}
+        is_talking_head = is_talking_head_config(output_config)
 
         # ---- 若 shot_list_data 为空，生成一个最小占位 shot -------------------
         if not shot_list_data:
@@ -882,10 +891,26 @@ class ShotPlanPersistenceService:
                 }
             ]
 
-        shot_list_data, target_duration_sec = _apply_duration_plan(
-            shot_list_data,
-            target_duration_sec,
-        )
+        if is_talking_head:
+            target_duration_for_plan = float(
+                output_config.get("target_duration_sec") or target_duration_sec or 0
+            )
+            try:
+                shot_list_data, target_duration_sec = apply_talking_head_duration_plan(
+                    shot_list_data,
+                    target_duration_for_plan,
+                )
+            except ShotPlanDurationError as exc:
+                raise ShotPlanGenerationError(
+                    str(exc),
+                    code="invalid_talking_head_duration",
+                ) from exc
+            scene_plan_data = build_talking_head_scene_plan(shot_list_data)
+        else:
+            shot_list_data, target_duration_sec = _apply_duration_plan(
+                shot_list_data,
+                target_duration_sec,
+            )
 
         # ---- ScenePlan 版本 -----------------------------------------------
         await scene_repo.deactivate_all(project_id)
@@ -1117,18 +1142,32 @@ class ShotPlanPersistenceService:
                 "lipsync_required": False,
             })
 
-        shot_list_data, target_duration_sec = _apply_duration_plan(
-            shot_list_data,
-            float((spec.output_config or {}).get("target_duration_sec", 0) or 0) if spec is not None else 0.0,
-        )
+        output_config = spec.output_config or {} if spec is not None else {}
+        if is_talking_head_config(output_config):
+            try:
+                shot_list_data, target_duration_sec = apply_talking_head_duration_plan(
+                    shot_list_data,
+                    float(output_config.get("target_duration_sec") or 0),
+                )
+            except ShotPlanDurationError as exc:
+                raise ShotPlanGenerationError(
+                    str(exc),
+                    code="invalid_talking_head_duration",
+                ) from exc
+        else:
+            shot_list_data, target_duration_sec = _apply_duration_plan(
+                shot_list_data,
+                float(output_config.get("target_duration_sec", 0) or 0),
+            )
 
         # ---- 步骤 3: 构造 scene_plan_data（当前版本：每张三宫格 1 个 shot）-------------
         scene_plan_data: list[dict] = []
         grid_count = max(1, len(shot_list_data))
+        is_talking_head = is_talking_head_config(output_config)
         for g, shot in enumerate(shot_list_data):
             scene_plan_data.append({
                 "scene_id": f"scene_{g + 1:03d}",
-                "scene_name": f"三宫格 #{g + 1}",
+                "scene_name": f"口播 Segment {g + 1}" if is_talking_head else f"三宫格 #{g + 1}",
                 "shot_indices": [int(shot.get("shot_index", g))],
             })
 
