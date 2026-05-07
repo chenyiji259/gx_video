@@ -96,14 +96,12 @@ def test_seedance_payload_always_locks_resolution_to_480p():
     assert payload["resolution"] == "480p"
 
 
-def test_seedance_merges_negative_prompt_into_text_content():
-    merged = SeedanceAdapter._merge_negative_prompt(
-        "生成一段口播视频。",
-        "字幕，文字贴片，水印",
-    )
+def test_seedance_appends_video_output_constraints_without_negative_prompt():
+    merged = SeedanceAdapter._append_video_output_constraints("生成一段口播视频。")
 
     assert "生成一段口播视频。" in merged
-    assert "负向约束：不要生成以下内容：字幕，文字贴片，水印。" in merged
+    assert "不要生成字幕、水印。" in merged
+    assert "负向约束" not in merged
 
 
 def test_default_seedance_provider_uses_fast_model_from_config():
@@ -162,7 +160,10 @@ async def test_generate_logs_seedance_request_payload_and_submits_480p(monkeypat
     )
 
     assert submitted_payloads[0]["resolution"] == "480p"
-    assert "负向约束：不要生成以下内容：字幕，文字贴片。" in submitted_payloads[0]["content"][0]["text"]
+    text_prompt = submitted_payloads[0]["content"][0]["text"]
+    assert "不要生成字幕、水印。" in text_prompt
+    assert "负向约束" not in text_prompt
+    assert "文字贴片" not in text_prompt
     request_logs = [
         record
         for record in fake_logger.records

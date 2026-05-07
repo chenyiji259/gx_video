@@ -200,7 +200,7 @@ def _derive_audio_direction_text(
     shot: Any,
     spec: Any | None,
 ) -> str:
-    """派生视频生成阶段的声音/旁白/BGM策略说明。"""
+    """派生视频生成阶段的人声策略说明。"""
     brief_payload = getattr(brief, "raw_payload", None) or {}
     if isinstance(brief_payload.get("creative_brief"), dict):
         brief_payload = brief_payload.get("creative_brief") or {}
@@ -232,32 +232,24 @@ def _derive_audio_direction_text(
     if expression_type == "explainer":
         voice = "专业、亲切、可信赖的中文讲解女声，语速中等偏稳，咬字清楚"
         tone = "像经验丰富的护肤顾问在面对镜头解释重点，避免夸张推销感"
-        bgm = "背景音应轻、干净、低存在感，可有细微科技感或生活方式感 pad，不要压过人声"
     elif expression_type == "ad":
         voice = "更有记忆点和节奏感的中文广告旁白，可更干脆、更聚焦卖点"
         tone = "句子更短、更有强调感，重点信息和 CTA 要更明确"
-        bgm = "背景音可更鲜明、更有节奏，但仍需给品牌信息和口播让位"
     elif expression_type == "drama":
         voice = "若该 shot 有台词，优先真实人物说话感；若无台词，不要强行补旁白"
         tone = "情绪跟随角色状态变化，避免广告腔或解说腔"
-        bgm = "背景音服务剧情情绪，可更电影化，但不要破坏对白可懂度"
     elif expression_type == "visual":
         voice = "默认无旁白；若当前 shot 没有 dialogue，不要暗示额外口播"
         tone = "以画面和节奏主导表达"
-        bgm = "背景音或氛围音应承担主要情绪推进作用"
     else:
         voice = "中文中性旁白或自然口播，根据当前镜头内容保持稳定"
         tone = "信息表达清晰，不要抢画面"
-        bgm = "背景音保持克制，优先保证主体表达清楚"
+    voice_only = "只允许中文说话人声；不要背景音乐、BGM、环境声、场景音、音效、掌声或转场音，人声之外不需要任何声音"
 
     delivery_style = "derived"
-    bgm_action = "derived"
-    bgm_intensity = "derived"
     continuity_group = "derived"
     if isinstance(shot_audio_strategy, dict):
         delivery_style = str(shot_audio_strategy.get("delivery_style") or delivery_style)
-        bgm_action = str(shot_audio_strategy.get("bgm_action") or bgm_action)
-        bgm_intensity = str(shot_audio_strategy.get("bgm_intensity") or bgm_intensity)
         continuity_group = str(shot_audio_strategy.get("continuity_group") or continuity_group)
         if shot_audio_strategy.get("voice_tone"):
             tone = str(shot_audio_strategy.get("voice_tone"))
@@ -272,8 +264,8 @@ def _derive_audio_direction_text(
             f"表达类型: {expression_type}",
             f"建议音色: {voice}",
             f"建议语气: {tone}",
-            f"背景音策略: {bgm}",
-            f"当前 shot 声音执行: delivery_style={delivery_style}, bgm_action={bgm_action}, bgm_intensity={bgm_intensity}, continuity_group={continuity_group}",
+            f"声音硬约束: {voice_only}",
+            f"当前 shot 人声执行: delivery_style={delivery_style}, continuity_group={continuity_group}",
             mood_rule,
             shot_rule,
             audience_rule,

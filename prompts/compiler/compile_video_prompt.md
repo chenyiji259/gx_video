@@ -53,7 +53,7 @@ variables:
 
 不要把配音稿改写成摘要，也不要漏掉。
 
-### 声音与背景音策略
+### 人声策略
 {{ audio_direction }}
 
 ### 参考素材状态
@@ -121,18 +121,18 @@ variables:
 情绪词参考（选贴合的，不全部堆叠）：
 melancholic, intimate, dreamy, intense, explosive, euphoric, restrained, contemplative
 
-### 第 6 层：声音与背景音统一（来源：audio_direction + shot_spec.dialogue）
+### 第 6 层：人声统一（来源：audio_direction + shot_spec.dialogue）
 如果当前 shot 有 `视频配音`，你必须同时考虑：
 
 - 说话人的音色定位
 - 语气和节奏是否贴合当前镜头情绪
-- 背景音 / BGM 是否应克制、突出、还是仅做氛围铺底
+- 声音硬约束：最终只允许说话人声，不要背景音乐、BGM、环境声、场景音、音效、掌声或转场音
 
 这部分不要求你输出单独字段，但要把它自然编码进 `positive_prompt` 的语义里。
 
 如果当前 shot 没有台词：
 - 不要暗示模型额外生成口播
-- 但可以保留“背景音克制 / 氛围音主导 / 音乐驱动”等声音环境预期
+- 也不要暗示背景音乐、环境声、场景音或音效
 
 ---
 
@@ -163,7 +163,7 @@ melancholic, intimate, dreamy, intense, explosive, euphoric, restrained, contemp
 5. 时间戳运动设计：图片1 → 图片2 → 图片3
 6. 镜头景别、构图、景深、焦点变化
 7. 情绪与视觉能量（第 5 层）
-8. 声音与背景音的执行预期（第 6 层）
+8. 人声-only 的执行预期（第 6 层）
 9. 若有视频配音/台词，作为单独一层显式保留
 
 语言风格：中文为主，运动词汇（push-in / tracking / handheld 等）可保留英文。

@@ -154,11 +154,11 @@ class SeedanceAdapter:
         reference_audio_urls: list[str] = list(merged.pop("reference_audio_urls", []) or [])
         if mode == "multi_image_fusion" and len(reference_image_urls) < 3:
             raise VideoGenerationError(
-                "multi_image_fusion 模式必须提供 3 张参考图（起始 / 中间 / 结尾）",
+                "multi_image_fusion 模式必须提供至少 3 张有序参考图",
                 code="missing_reference_images",
             )
 
-        compiled_prompt = self._merge_negative_prompt(prompt, negative_prompt)
+        compiled_prompt = self._append_video_output_constraints(prompt)
         payload = self._build_payload(
             prompt=compiled_prompt,
             mode=mode,
@@ -214,18 +214,13 @@ class SeedanceAdapter:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _merge_negative_prompt(prompt: str, negative_prompt: Optional[str]) -> str:
-        """Seedance 没有独立负向字段，将负向约束并入文本 prompt。"""
+    def _append_video_output_constraints(prompt: str) -> str:
+        """追加所有视频都必须遵守的输出约束。"""
         text = str(prompt or "").strip()
-        negative = str(negative_prompt or "").strip()
-        if not negative:
+        constraint = "不要生成字幕、水印。"
+        if constraint in text or "不要生成字幕, 水印" in text:
             return text
-        if "负向约束" in text and negative in text:
-            return text
-        return (
-            f"{text}\n\n"
-            f"负向约束：不要生成以下内容：{negative}。"
-        ).strip()
+        return f"{text}\n\n{constraint}".strip()
 
     def _build_payload(
         self,

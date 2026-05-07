@@ -574,6 +574,11 @@ class ImageGenerationTool:
         )
 
         download_started_at = time.monotonic()
+        logger.info(
+            f"三宫格开始下载 provider 图片: grid_index={grid_index} "
+            f"url={result.image_url[:160]!r} timeout=120s",
+            event_type="nine_grid_download_start",
+        )
         image_bytes = await self._download_image(result.image_url, timeout=120)
         logger.info(
             f"三宫格图片下载完成: grid_index={grid_index} size_bytes={len(image_bytes)} "

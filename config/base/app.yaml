@@ -16,10 +16,10 @@ media:
   ffmpeg_path: '${FFMPEG_PATH}'
 
 talking_head:
-  # Story Overview Board 生图阶段使用：本地人物图会上传为公网/签名 URL 传给图片模型。
-  # Seedance 视频阶段仍使用 host_reference_image_assets 的 asset:// 资产。
+  # Story Overview Board / Seedance 视频阶段共用：r1/r2/r3 为人物图，d1 为场地图。
+  # 本地图片会上传为公网/签名 URL 后再传给外部模型，避免把 asset:// 当作公网图片。
   story_board_reference_image_dir: "data/person_pic"
-  story_board_scene_image_path: "data/person_pic/host_reference_01.png"
+  story_board_scene_image_path: "data/person_pic/d1.png"
   host_reference_image_assets:
     - "asset://asset-20260506200638-6g86k"
     - "asset://asset-20260506200638-6g86k"

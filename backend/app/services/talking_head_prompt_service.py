@@ -34,6 +34,10 @@ from app.services.asset_access_service import build_asset_access_url
 from app.utils.ids import generate_ulid
 from app.utils.json_utils import safe_parse_json
 
+PERSON_REFERENCE_STEMS = ("r1", "r2", "r3")
+SCENE_REFERENCE_STEM = "d1"
+IMAGE_REFERENCE_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp")
+
 
 def segment_time_range(index_zero_based: int) -> str:
     start = index_zero_based * TALKING_HEAD_SEGMENT_DURATION_SEC
@@ -71,6 +75,58 @@ def _story_overview_board_reference_urls(
 
 def _project_root() -> Path:
     return Path(__file__).resolve().parents[3]
+
+
+def _resolve_path_from_project_root(path_text: str | Path) -> Path:
+    path = Path(path_text)
+    if not path.is_absolute():
+        path = _project_root() / path
+    return path
+
+
+def _find_named_image(directory: Path, stem: str) -> Path | None:
+    for suffix in IMAGE_REFERENCE_SUFFIXES:
+        candidate = directory / f"{stem}{suffix}"
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _ordered_person_reference_paths(ref_dir: Path) -> list[Path]:
+    ordered = [
+        path
+        for stem in PERSON_REFERENCE_STEMS
+        if (path := _find_named_image(ref_dir, stem)) is not None
+    ]
+    if ordered:
+        return ordered[:3]
+
+    image_paths: list[Path] = []
+    for pattern in ("*.png", "*.jpg", "*.jpeg", "*.webp"):
+        image_paths.extend(sorted(ref_dir.glob(pattern)))
+    return [
+        path
+        for path in image_paths
+        if path.stem.lower() != SCENE_REFERENCE_STEM
+    ][:3]
+
+
+def _default_scene_reference_path(ref_dir: Path) -> Path | None:
+    return _find_named_image(ref_dir, SCENE_REFERENCE_STEM)
+
+
+async def _upload_local_reference_image(
+    *,
+    project_id: str,
+    path: Path,
+    asset_dir: str,
+) -> str:
+    suffix = path.suffix.lower() or ".png"
+    content_type = mimetypes.guess_type(path.name)[0] or "image/png"
+    key = f"projects/{project_id}/assets/{asset_dir}/{path.stem}{suffix}"
+    storage = get_storage()
+    await storage.async_upload_file(key, path, content_type=content_type)
+    return storage.get_presigned_url(key, expiry_seconds=6 * 60 * 60)
 
 
 def _story_board_topic(*, spec: Any, brief_payload: dict[str, Any]) -> str:
@@ -160,7 +216,7 @@ def _audio_reference_prompt_items(count: int) -> list[dict[str, Any]]:
         {
             "audio_no": idx + 1,
             "role": "voice_reference",
-            "description": "只参考音色、声线质感、年龄感、口音和说话气质，不承载对白内容。",
+            "description": "只参考说话人声的音色、声线质感、年龄感、口音和说话气质，不承载对白内容，不代表背景音乐、环境声、场景音或音效。",
         }
         for idx in range(count)
     ]
@@ -292,7 +348,7 @@ def _build_story_overview_board_prompt(
 重要规则：
 这张图用于后续视频模型测试。图中的人物只允许作为“无五官占位主持人”出现，不要绘制可识别真人脸。人物可以保留身体轮廓、发型轮廓、灰色衬衫、白色内搭、黑框眼镜轮廓、手势、坐姿和服装风格，但脸部必须是柔和空白脸或浅色无五官脸部轮廓。不要生成真实眼睛、鼻子、嘴巴、皮肤细节或可识别面部纹理。真正的人脸身份后续会由视频生成请求中的授权人像素材提供。
 
-图内所有可见文字默认使用中文。除了必要专业镜头词汇如 push-in、close-up、macro、BGM、Seedance，其余标题、分区名、台词、说明、约束都必须用中文。
+图内所有可见文字默认使用中文。除了必要专业镜头词汇如 push-in、close-up、macro、Seedance，其余标题、分区名、台词、说明、约束都必须用中文。
 
 项目主题：
 《{topic}》
@@ -332,8 +388,8 @@ def _build_story_overview_board_prompt(
 底部左侧：灯光 / 氛围 / 风格注释
 柔和主光、暖色背景灯、干净护肤质感、舒适对比。关键词：专业、冷静、可信、干净、温暖、成熟男性讲师。
 
-底部中间：音频 / 声调锁定
-声音：成熟中文男性声线，冷静、清晰、专业、亲和。语速：中等，有自然停顿，不夸张推销。BGM：轻柔干净，低音量，生活方式与科技感之间。
+底部中间：人声 / 说话音锁定
+声音：只保留成熟中文男性说话人声，冷静、清晰、专业、亲和。语速：中等，有自然停顿，不夸张推销。不要背景音乐、不要环境声、不要场景音、不要音效，人声之外不需要任何声音。
 
 底部右侧：摄影语言注释
 镜头选择：35mm 用于主角中近景，50mm 用于讲解 close-up，85mm macro 用于产品和成分卡片。运镜风格：大部分固定，重点处轻微 push-in，干净产品插入镜头。视觉理念：同一占位主角、同一工作室、清晰教育表达、高级护肤品牌质感。
@@ -387,7 +443,7 @@ def _fallback_story_board_prompt(
         "生成一张 21:9 中文 Story Overview Board / 口播 Production Board，覆盖完整视频，"
         "内部清晰分成 4 个或对应数量的 15 秒 Segment 区域。"
         "画面包含全局创意圣经、同一主持人身份锁、统一讲解场景、机位图、每段台词、微镜头、"
-        "灯光、音频声色和摄影规则。可见文字使用中文。"
+        "灯光、人声说话音色和摄影规则。可见文字使用中文。"
         f"主题：{topic}。"
         f"Segments：{'；'.join(segment_lines)}。"
         "固定人物参考资产只锁定脸部身份、年龄感、气质和基础身形，不锁死服装；"
@@ -416,59 +472,6 @@ def _fallback_story_board_prompt(
     }
 
 
-def _build_clean_reference_prompt(
-    *,
-    shot: Any,
-    segment_script: dict[str, Any],
-    story_board_url: str,
-    layout_reading_map: dict[str, Any],
-    topic: str,
-    product_refs: list[dict[str, str]] | None = None,
-) -> dict[str, Any]:
-    index = int(getattr(shot, "shot_index", 0) or 0)
-    segment_key = f"segment_{index + 1}"
-    instruction = str(
-        layout_reading_map.get(segment_key)
-        or f"只读取故事大图中 Segment {index + 1} / {segment_time_range(index)} 区域"
-    )
-    goal = segment_script.get("segment_goal") or segment_script.get("action_description") or topic
-    product_refs = product_refs or []
-    product_text = _product_reference_text(product_refs, start_index=2)
-    positive = f"""
-从完整 Story Overview Board 派生当前 shot 的无文字 clean visual reference。
-
-参考图职责：
-图片1是完整 Story Overview Board，只用于读取当前段落的场景、构图、人物动作、产品摆放、动作节奏和光线氛围。
-图片2及之后如存在，是用户上传产品图，只用于锁定产品瓶身、包装、颜色、材质、形态和主要视觉特征，不是人物图或场地图。
-
-当前段落：Segment {index + 1} / {segment_time_range(index)}
-读取范围：{instruction}
-当前段落目标：{goal}
-用户上传产品图职责：
-{product_text}
-
-生成一张真实视频关键视觉参考帧，不要裁剪原图，不要复刻 Production Board 排版。
-复用全局公共内容：同一位光希老王主角轮廓、灰色衬衫、白色内搭、眼镜轮廓、成熟专业气质；同一个户外露台护肤科普场景；木质桌面、自然光、暖灰柔和色调；护肤产品、成分卡、皮肤屏障或分子结构类科学视觉符号。
-如果用户上传了产品图，当前 clean reference 必须继续使用这些产品图，产品瓶身、包装、颜色、材质、形态和主要视觉特征必须与上传产品图一致；不允许生成上传产品图以外的不相干产品、随机护肤瓶或虚构包装。
-只提取当前 Segment 的构图、人物动作、产品露出、镜头节奏和场景变化，不读取其他 Segment。
-
-画面必须是干净视频参考图：无字幕、无标题、无编号、无表格、无网格、无分栏、无箭头标注、无说明栏、无镜头参数、无台词、无任何可读中文/英文/数字/logo/水印/UI字段。
-产品瓶身、成分卡、纸张和包装只能作为不可读视觉符号出现，不能有可读字；产品可以去掉可读文字，但瓶身轮廓、瓶盖颜色、包装比例、主体颜色和材质观感必须贴近用户上传产品图。
-主角脸部保持无五官占位风格或低细节一致性，不要生成可识别真人脸。
-""".strip()
-    return {
-        "image_positive_prompt": positive,
-        "image_negative_prompt": (
-            "文字，字幕，标题，编号，镜头参数，台词，说明文字，Production Board，分镜表，"
-            "网格排版，UI，箭头标注，标签，logo，水印，可读产品文字，可读成分卡文字，"
-            "乱码文字，真实可识别人脸，多人物，换装，换场景，随机护肤瓶，虚构产品包装，"
-            "与用户上传产品图不一致的产品"
-        ),
-        "source_segment_summary": f"Segment {index + 1} / {segment_time_range(index)} clean visual reference",
-        "params": {"aspect_ratio": "16:9", "size": "1920x1080", "resolution": "1080p"},
-    }
-
-
 def _fallback_video_prompt(
     *,
     shot: Any,
@@ -477,7 +480,6 @@ def _fallback_video_prompt(
     host_assets: list[str],
     audio_assets: list[str],
     layout_reading_map: dict[str, Any],
-    clean_reference_url: str | None = None,
     product_refs: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     index = int(getattr(shot, "shot_index", 0) or 0)
@@ -494,7 +496,7 @@ def _fallback_video_prompt(
     )
     goal = segment_script.get("segment_goal") or segment_script.get("action_description") or "围绕本段主题进行护肤科普讲解"
     product_refs = product_refs or []
-    shot_reference_url = clean_reference_url or story_board_url
+    shot_reference_url = story_board_url
     product_text = _product_reference_text(product_refs, start_index=5)
     no_visible_text_rule = (
         "无字幕硬约束：台词只能通过人物声音、口型和表演传达，画面中绝对不要出现任何可读文字。"
@@ -504,18 +506,19 @@ def _fallback_video_prompt(
     positive = f"""
 生成一个 15 秒中文单人护肤科普口播视频。
 
-你会收到四张参考图片和三段参考音频：
+你会收到有序参考图片和参考音频：
 图片1、图片2、图片3是同一位光希老王的固定角色资产，不是三位不同角色。图片1是唯一服装与整体造型基准，人物上衣、内搭、颜色、领口、袖口、配饰和穿搭风格必须全程严格保持图片1一致。图片2、图片3只用于补充锁定同一角色的脸部身份、年龄感、五官气质和基础身形，不允许从图片2、图片3引入新服装、新性别、新职业气质或新的造型风格。
-图片4是当前 shot 的 clean visual reference，不是 Production Board，也不是裁剪出来的分镜表。图片4已经从故事大图派生并去除了标题、编号、台词、说明栏、镜头参数、字幕和所有可读文字；图片4只用于参考当前 Segment 的真实视频场景、构图、产品摆放、动作节奏和光线氛围。
+图片4是完整 Story Overview Board / Production Board 大图，只用于读取当前 Segment 的位置、构图、场景、桌面产品、道具、动作节奏和光线氛围；不要复刻它的网格页面、标题栏、编号、台词、说明栏、镜头参数、字幕或任何可读文字。
 {product_text}
 产品图必须作为本段介绍/展示的真实产品外观参考，结合创意和剧本说明产品如何出现在桌面、手边或产品 close-up 中；不要只依赖 Production Board 里的泛化道具。
-音频1、音频2、音频3只用于参考音色、声线质感、年龄感、口音和说话气质，不承载对白内容，不照搬原音频内容、节奏或停顿。
+音频1、音频2、音频3只用于参考说话人声的音色、声线质感、年龄感、口音和说话气质，不承载对白内容，不照搬原音频内容、节奏或停顿；它们不是背景音乐、环境声、场景音或音效参考。
 
 本次只生成 Segment {index + 1} / {segment_time_range(index)}。当前段语义来自结构化脚本和镜头计划，不依赖图片4 OCR。
-图片4的上游来源是 Story Overview Board 中的当前区域：{instruction}。这条信息只用于确认 clean visual reference 的来源，不允许把原始 Production Board 的文字、编号、分栏或排版带回最终视频。
+图片4读取范围：{instruction}。这条信息只用于从大图中定位当前段落，不允许把原始 Production Board 的文字、编号、分栏或排版带回最终视频。
 本段目标：{goal}。
 完整台词参考：「{dialogue or '本段可包含开场动画、产品特写、自然停顿或少量无对白片段'}」
 {no_visible_text_rule}
+声音硬约束：最终视频只需要中文说话人声，不要背景音乐、不要环境声、不要场景音、不要音效、不要掌声、不要转场音，人声之外不需要别的声音。
 
 分时间段生成真实口播和动作：
 0-3 秒：中近景，光希老王保持图片1服装和整体造型，面对镜头平静建立本段主题，口型和台词自然同步。
@@ -527,7 +530,7 @@ def _fallback_video_prompt(
 """.strip()
     return {
         "positive_prompt": positive,
-        "negative_prompt": "字幕，水印，标题栏，文字贴片，Production Board 页面，网格排版，多人物，换脸，换年龄感，换装，服装漂移，改性别，白大褂，西装，耳饰，照抄故事大图乱码文字，读取其他 Segment，跳到新场景，夸张表演",
+        "negative_prompt": "字幕，水印，标题栏，文字贴片，Production Board 页面，网格排版，多人物，换脸，换年龄感，换装，服装漂移，改性别，白大褂，西装，耳饰，照抄故事大图乱码文字，读取其他 Segment，跳到新场景，夸张表演，背景音乐，BGM，环境声，场景音，音效，掌声，转场音",
         "board_segment_reading_instruction": instruction,
         "dialogue_script": dialogue,
         "timeline": segment_script.get("speech_timing_plan") or [],
@@ -555,10 +558,13 @@ def _enforce_video_prompt_contract(rendered: dict[str, Any]) -> dict[str, Any]:
         "编号、时间码、贴纸文字、UI文字或任何文字贴片；产品瓶身、成分卡和道具只能作为不可读的视觉符号，"
         "不能承载可读文字。"
     )
+    voice_only_contract = (
+        "声音硬约束：最终视频只需要中文说话人声；音频参考只用于说话音色和声线，不要背景音乐、不要环境声、不要场景音、不要音效、不要掌声、不要转场音，人声之外不需要任何声音。"
+    )
     contract = (
         "强制一致性约束：主角只能是光希老王；图片1是唯一服装与整体造型基准，人物上衣、内搭、颜色、领口、袖口、配饰和穿搭风格必须在所有 shot 全程严格保持图片1一致；"
         "图片2、图片3只用于保持同一角色的脸部身份、年龄感、五官气质和基础身形一致，不允许从图片2、图片3引入新服装、新性别、新职业气质或新造型；"
-        "图片4是当前 shot 的 clean visual reference，不是 Production Board，也不是裁剪出来的分镜表；它只作为当前 segment 的真实视频场景、构图、产品、道具和辅助视觉参考，当前段语义来自结构化脚本和镜头计划；"
+        "图片4是完整 Story Overview Board / Production Board 大图，只用于读取当前 segment 的真实视频场景、构图、产品、道具和辅助视觉参考；不要复刻它的网格页面、标题栏、编号、台词、说明栏、镜头参数、字幕或任何可读文字；当前段语义来自结构化脚本和镜头计划；"
         "最终视频必须是纯净口播画面，不生成制作板页面、网格、标题栏、字幕、文字贴片或水印。"
     )
     if "图片1是唯一服装" not in positive or "光希老王" not in positive:
@@ -567,6 +573,8 @@ def _enforce_video_prompt_contract(rendered: dict[str, Any]) -> dict[str, Any]:
         positive = f"{positive} {drift_overrides}"
     if "无字幕硬约束" not in positive:
         positive = f"{positive}{' ' if positive else ''}{no_visible_text_contract}"
+    if "声音硬约束" not in positive:
+        positive = f"{positive}{' ' if positive else ''}{voice_only_contract}"
     result["positive_prompt"] = positive
 
     negative = str(result.get("negative_prompt") or "").strip()
@@ -591,6 +599,13 @@ def _enforce_video_prompt_contract(rendered: dict[str, Any]) -> dict[str, Any]:
         "产品卖点文字",
         "可读文字",
         "UI文字",
+        "背景音乐",
+        "BGM",
+        "环境声",
+        "场景音",
+        "音效",
+        "掌声",
+        "转场音",
     ]
     for item in required_negative:
         if item not in negative:
@@ -725,19 +740,20 @@ class TalkingHeadPromptService:
     async def _resolve_scene_reference_image_url(self, project_id: str) -> str | None:
         cfg = get_config().talking_head
         scene_path = str(getattr(cfg, "story_board_scene_image_path", "") or "").strip()
-        if not scene_path:
+        if scene_path:
+            path = _resolve_path_from_project_root(scene_path)
+        else:
+            ref_dir = _resolve_path_from_project_root(cfg.story_board_reference_image_dir)
+            path = _default_scene_reference_path(ref_dir)
+        if path is None:
             return None
-        path = Path(scene_path)
-        if not path.is_absolute():
-            path = _project_root() / path
         if not path.exists():
             return None
-        suffix = path.suffix.lower() or ".png"
-        content_type = mimetypes.guess_type(path.name)[0] or "image/png"
-        key = f"projects/{project_id}/assets/talking_head_scene_reference/{path.stem}{suffix}"
-        storage = get_storage()
-        await storage.async_upload_file(key, path, content_type=content_type)
-        return storage.get_presigned_url(key, expiry_seconds=6 * 60 * 60)
+        return await _upload_local_reference_image(
+            project_id=project_id,
+            path=path,
+            asset_dir="talking_head_scene_reference",
+        )
 
     async def _resolve_story_board_reference_image_urls(
         self,
@@ -746,134 +762,19 @@ class TalkingHeadPromptService:
         fallback_references: list[str],
     ) -> list[str]:
         cfg = get_config().talking_head
-        ref_dir = Path(cfg.story_board_reference_image_dir)
-        if not ref_dir.is_absolute():
-            ref_dir = _project_root() / ref_dir
-        image_paths: list[Path] = []
-        scene_path = Path(getattr(cfg, "story_board_scene_image_path", "") or "")
-        if scene_path and not scene_path.is_absolute():
-            scene_path = _project_root() / scene_path
-        scene_path = scene_path.resolve() if scene_path else None
-
-        if ref_dir.exists():
-            for pattern in ("*.png", "*.jpg", "*.jpeg", "*.webp"):
-                for candidate in sorted(ref_dir.glob(pattern)):
-                    resolved_candidate = candidate.resolve()
-                    if scene_path and resolved_candidate == scene_path:
-                        continue
-                    image_paths.append(candidate)
+        ref_dir = _resolve_path_from_project_root(cfg.story_board_reference_image_dir)
+        image_paths = _ordered_person_reference_paths(ref_dir) if ref_dir.exists() else []
         if not image_paths:
             return _clean_reference_list(fallback_references)
 
-        storage = get_storage()
         urls: list[str] = []
-        for path in image_paths[:3]:
-            suffix = path.suffix.lower() or ".png"
-            content_type = mimetypes.guess_type(path.name)[0] or "image/png"
-            key = f"projects/{project_id}/assets/talking_head_reference/{path.stem}{suffix}"
-            await storage.async_upload_file(key, path, content_type=content_type)
-            urls.append(storage.get_presigned_url(key, expiry_seconds=6 * 60 * 60))
+        for path in image_paths:
+            urls.append(await _upload_local_reference_image(
+                project_id=project_id,
+                path=path,
+                asset_dir="talking_head_reference",
+            ))
         return urls
-
-    async def compile_talking_head_clean_reference(
-        self,
-        session: AsyncSession,
-        project_id: str,
-        *,
-        shot: Any,
-        story_board_url: str,
-        layout_reading_map: dict[str, Any],
-    ) -> PromptBundle:
-        logger = get_project_logger(project_id, module="services.talking_head_prompt")
-        spec = await ProjectSpecRepository(session).get_active(project_id)
-        brief = await CreativeBriefRepository(session).get_active(project_id)
-        narrative = await NarrativeScriptVersionRepository(session).get_active(project_id)
-        if spec is None or brief is None:
-            raise ValueError("缺少 active spec/brief，无法编译 shot clean reference prompt")
-        brief_payload = _brief_payload(brief)
-        narrative_payload = narrative.raw_payload if narrative is not None else {}
-        segment_scripts = narrative_payload.get("shots") or []
-        shot_index = int(getattr(shot, "shot_index", 0) or 0)
-        product_refs = await _resolve_product_reference_urls(session, project_id, spec)
-        segment_script = next(
-            (item for item in segment_scripts if int(item.get("shot_index", -1)) == shot_index),
-            segment_scripts[shot_index] if shot_index < len(segment_scripts) else {},
-        )
-        rendered = await self._call_llm(
-            template_name="compile_talking_head_clean_reference_prompt",
-            variables={
-                "project_spec_json": _json_text({"user_prompt": spec.user_prompt, "output_config": spec.output_config}),
-                "talking_head_brief_json": _json_text(brief_payload),
-                "segment_script_json": _json_text(segment_script),
-                "story_board_url": story_board_url,
-                "shot_index": shot_index + 1,
-                "segment_time_range": segment_time_range(shot_index),
-                "layout_reading_map_json": _json_text(layout_reading_map),
-                "product_reference_assets_json": _json_text(
-                    _product_reference_prompt_items(product_refs, start_index=2)
-                ),
-            },
-            logger=logger,
-        )
-        if not rendered.get("image_positive_prompt"):
-            rendered = _build_clean_reference_prompt(
-                shot=shot,
-                segment_script=segment_script,
-                story_board_url=story_board_url,
-                layout_reading_map=layout_reading_map,
-                topic=_story_board_topic(spec=spec, brief_payload=brief_payload),
-                product_refs=product_refs,
-            )
-        registry = get_provider_registry()
-        provider_profile = registry.get_default("image")
-        provider_name = provider_profile.name if provider_profile else "gpt_image_2"
-        params = dict(rendered.get("params") or {})
-        params.update(
-            {
-                "aspect_ratio": "16:9",
-                "size": "1920x1080",
-                "resolution": "1080p",
-                "source_story_board_url": story_board_url,
-                "source_segment_index": shot_index + 1,
-                "source_segment_time_range": segment_time_range(shot_index),
-                "asset_purpose": "talking_head_shot_clean_reference",
-                "target_label": f"talking_head_clean_ref_shot_{shot_index + 1:03d}",
-            }
-        )
-        clean_target_id = str(getattr(shot, "id", "") or "").strip() or generate_ulid()
-        bundle = PromptBundle(
-            bundle_id=generate_ulid(),
-            target_type="storyboard_frame",
-            target_id=clean_target_id,
-            provider=provider_name,
-            positive_prompt=str(rendered.get("image_positive_prompt") or ""),
-            negative_prompt=rendered.get("image_negative_prompt"),
-            reference_image_url=story_board_url,
-            reference_image_urls=[story_board_url, *[ref["url"] for ref in product_refs]],
-            reference_asset_ids=[ref["asset_id"] for ref in product_refs],
-            reference_weight=0.55,
-            params=params,
-            source_brief_version_id=brief.id,
-        )
-        await self._persist_bundle(session, project_id, bundle)
-        LocalArtifactStore(project_id).write_json(
-            ArtifactStage.PROMPT_BUNDLES,
-            f"bundle_talking_head_clean_ref_shot_{shot_index + 1:03d}",
-            {
-                "bundle_id": bundle.bundle_id,
-                "shot_index": shot_index,
-                "target_type": bundle.target_type,
-                "target_id": bundle.target_id,
-                "provider": bundle.provider,
-                "positive_prompt": bundle.positive_prompt,
-                "negative_prompt": bundle.negative_prompt,
-                "params": bundle.params,
-                "reference_image_urls": bundle.reference_image_urls,
-                "reference_asset_ids": bundle.reference_asset_ids,
-                "product_reference_urls": [ref["url"] for ref in product_refs],
-            },
-        )
-        return bundle
 
     async def compile_talking_head_video(
         self,
@@ -882,7 +783,6 @@ class TalkingHeadPromptService:
         *,
         shot: Any,
         story_board_url: str,
-        clean_reference_url: str | None = None,
         layout_reading_map: dict[str, Any],
         host_reference_assets: list[str],
         reference_audio_assets: list[str],
@@ -896,8 +796,11 @@ class TalkingHeadPromptService:
         narrative_payload = narrative.raw_payload if narrative is not None else {}
         segment_scripts = narrative_payload.get("shots") or []
         shot_index = int(getattr(shot, "shot_index", 0) or 0)
-        host_reference_urls = _clean_reference_list(host_reference_assets)
-        shot_reference_url = clean_reference_url or story_board_url
+        host_reference_urls = await self._resolve_story_board_reference_image_urls(
+            project_id,
+            fallback_references=host_reference_assets,
+        )
+        shot_reference_url = story_board_url
         reference_audio_urls = _clean_reference_list(reference_audio_assets)
         product_refs = await _resolve_product_reference_urls(session, project_id, spec)
         segment_script = next(
@@ -911,12 +814,11 @@ class TalkingHeadPromptService:
                 "talking_head_brief_json": _json_text(_brief_payload(brief)),
                 "segment_script_json": _json_text(segment_script),
                 "story_board_url": story_board_url,
-                "clean_reference_url": shot_reference_url,
                 "shot_index": shot_index + 1,
                 "segment_time_range": segment_time_range(shot_index),
                 "layout_reading_map_json": _json_text(layout_reading_map),
                 "host_reference_assets_json": _json_text(
-                    _host_reference_prompt_items(len(host_reference_assets))
+                    _host_reference_prompt_items(len(host_reference_urls))
                 ),
                 "reference_audio_assets_json": _json_text(
                     _audio_reference_prompt_items(len(reference_audio_assets))
@@ -932,8 +834,7 @@ class TalkingHeadPromptService:
                 shot=shot,
                 segment_script=segment_script,
                 story_board_url=story_board_url,
-                clean_reference_url=shot_reference_url,
-                host_assets=host_reference_assets,
+                host_assets=host_reference_urls,
                 audio_assets=reference_audio_assets,
                 layout_reading_map=layout_reading_map,
                 product_refs=product_refs,
@@ -956,7 +857,6 @@ class TalkingHeadPromptService:
                 "board_segment_reading_instruction": rendered.get("board_segment_reading_instruction"),
                 "storyboard_layout": TALKING_HEAD_LAYOUT,
                 "source_story_board_url": story_board_url,
-                "clean_reference_url": shot_reference_url,
             }
         )
         bundle = PromptBundle(
@@ -966,7 +866,7 @@ class TalkingHeadPromptService:
             provider=provider_name,
             positive_prompt=str(rendered.get("positive_prompt") or ""),
             negative_prompt=rendered.get("negative_prompt"),
-            reference_asset_ids=list(host_reference_assets) + list(reference_audio_assets) + [ref["asset_id"] for ref in product_refs],
+            reference_asset_ids=list(reference_audio_assets) + [ref["asset_id"] for ref in product_refs],
             reference_image_url=host_reference_urls[0] if host_reference_urls else None,
             reference_image_urls=[*host_reference_urls, shot_reference_url, *[ref["url"] for ref in product_refs]],
             reference_audio_urls=list(reference_audio_urls),

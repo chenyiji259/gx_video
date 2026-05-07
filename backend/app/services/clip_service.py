@@ -448,37 +448,12 @@ class ClipService:
 
             if is_talking_head:
                 cfg = get_config().talking_head
-                async with UnitOfWork() as clean_uow:
-                    clean_bundle = await self._talking_head_compiler.compile_talking_head_clean_reference(
-                        session=clean_uow.session,
-                        project_id=project_id,
-                        shot=shot,
-                        story_board_url=story_board_url,
-                        layout_reading_map=layout_reading_map,
-                    )
-                    logger.debug(
-                        f"shot[{shot_index}] clean reference prompt 编译完成: bundle_id={clean_bundle.bundle_id!r}",
-                        event_type="clip_clean_reference_prompt_compiled",
-                    )
-                clean_reference_meta = await self._image_tool.generate_for_bundle_local(
-                    bundle=clean_bundle,
-                    project_id=project_id,
-                    shot_index=shot_index,
-                    name_prefix="talking_head_clean_reference",
-                )
-                clean_reference_url = str(clean_reference_meta.get("provider_url") or "")
-                if not clean_reference_url:
-                    raise ClipGenerationError(
-                        "shot clean reference 已生成但无法获取访问 URL",
-                        code="missing_clean_reference_url",
-                    )
                 async with UnitOfWork() as uow:
                     bundle = await self._talking_head_compiler.compile_talking_head_video(
                         session=uow.session,
                         project_id=project_id,
                         shot=shot,
                         story_board_url=story_board_url,
-                        clean_reference_url=clean_reference_url,
                         layout_reading_map=layout_reading_map,
                         host_reference_assets=cfg.host_reference_image_assets,
                         reference_audio_assets=cfg.reference_audio_assets,
