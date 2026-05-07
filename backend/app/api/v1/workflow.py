@@ -321,6 +321,10 @@ async def trigger_generate_creative_package(
     """
     req_id = get_request_id(request)
     user_id = str(current_user.id)
+    _logger.info(
+        f"creative_package 请求进入: project={project_id!r} user={user_id!r}",
+        event_type="creative_package_request_start",
+    )
 
     await _cancel_open_decisions(
         project_id,
@@ -342,17 +346,35 @@ async def trigger_generate_creative_package(
 
     brief_svc = BriefPersistenceService()
     try:
+        _logger.info(
+            f"creative_package 开始生成 brief/style: project={project_id!r}",
+            event_type="creative_package_brief_start",
+        )
         brief_version, style_version = await brief_svc.generate_and_save(
             project_id=project_id,
             user_id=user_id,
             style_direction="",
         )
+        _logger.info(
+            f"creative_package brief/style 完成: project={project_id!r} "
+            f"brief={brief_version.id!r} style={style_version.id!r}",
+            event_type="creative_package_brief_done",
+        )
     except BriefGenerationError as exc:
+        _logger.warning(
+            f"creative_package brief/style 业务失败: project={project_id!r} "
+            f"code={exc.code!r} msg={exc.message!r}",
+            event_type="creative_package_brief_business_failed",
+        )
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail={"code": exc.code, "message": exc.message},
         ) from exc
     except Exception as exc:
+        _logger.exception(
+            f"creative_package brief/style 异常: project={project_id!r}",
+            event_type="creative_package_brief_failed",
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"code": "creative_package_brief_failed", "message": str(exc)},
@@ -360,16 +382,33 @@ async def trigger_generate_creative_package(
 
     narrative_svc = NarrativeScriptService()
     try:
+        _logger.info(
+            f"creative_package 开始生成 narrative: project={project_id!r}",
+            event_type="creative_package_narrative_start",
+        )
         narrative = await narrative_svc.generate_and_save(
             project_id=project_id,
             user_id=user_id,
         )
+        _logger.info(
+            f"creative_package narrative 完成: project={project_id!r} narrative={narrative.id!r}",
+            event_type="creative_package_narrative_done",
+        )
     except NarrativeScriptError as exc:
+        _logger.warning(
+            f"creative_package narrative 业务失败: project={project_id!r} "
+            f"code={exc.code!r} msg={exc.message!r}",
+            event_type="creative_package_narrative_business_failed",
+        )
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail={"code": exc.code, "message": exc.message},
         ) from exc
     except Exception as exc:
+        _logger.exception(
+            f"creative_package narrative 异常: project={project_id!r}",
+            event_type="creative_package_narrative_failed",
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"code": "creative_package_narrative_failed", "message": str(exc)},

@@ -49,11 +49,32 @@ const STAGE_TO_STEP: Record<string, number> = {
 const WORKFLOW_STEPS = [
   { step: 1, title: '输入需求', description: '填写视频目标' },
   { step: 2, title: '创意剧本包', description: '审稿并确认' },
-  { step: 3, title: '故事大图', description: '查看 Production Board' },
+  { step: 3, title: '导演分镜图', description: '查看 Director Shot List' },
   { step: 4, title: '确认生成', description: '进入视频生成' },
   { step: 5, title: '视频生成', description: '播放片段' },
   { step: 6, title: '拼接导出', description: '生成最终视频' },
 ];
+
+const resolveWorkspaceStep = (workspace: WorkspaceData | null): number => {
+  if (!workspace) return 1;
+
+  const stage = workspace.project.current_stage;
+  if (stage !== 'failed') {
+    return STAGE_TO_STEP[stage] || 1;
+  }
+
+  if (workspace.latestExport || workspace.timeline) return 6;
+
+  const hasVideoStageEvidence =
+    workspace.clips.length > 0
+    || workspace.storyboardGrids.length > 0
+    || workspace.shots.some((shot) => ['failed', 'clip_ready', 'stale'].includes(String(shot.status || '')));
+  if (hasVideoStageEvidence) return 5;
+
+  if (workspace.narrative) return 3;
+  if (workspace.spec) return 2;
+  return 1;
+};
 
 const DEFAULT_FORM = {
   prompt: '',
@@ -314,11 +335,18 @@ const triggerBrowserDownload = (url: string, filename: string) => {
   const link = document.createElement('a');
   link.href = url;
   link.download = filename;
-  link.target = '_blank';
-  link.rel = 'noopener noreferrer';
   document.body.appendChild(link);
   link.click();
   link.remove();
+};
+
+const triggerBlobDownload = (blob: Blob, filename: string) => {
+  const objectUrl = URL.createObjectURL(blob);
+  try {
+    triggerBrowserDownload(objectUrl, filename);
+  } finally {
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+  }
 };
 
 async function maybeLoad<T>(loader: () => Promise<T>): Promise<T | null> {
@@ -684,7 +712,7 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
   const previewMedia = stablePreviewSource.url || previewSource.url;
   const previewIsVideo = isVideoUrl(previewMedia);
 
-  const currentStep = workspace ? STAGE_TO_STEP[workspace.project.current_stage] || 1 : 1;
+  const currentStep = resolveWorkspaceStep(workspace);
 
   useEffect(() => {
     setActiveStep((prev) => {
@@ -885,7 +913,7 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
   const handleRegenerateKeyframes = async () => {
     const feedback = storyboardFeedback.trim();
     if (!feedback) {
-      setError('请先填写对当前故事大图/关键帧的不满意点，系统会用这段反馈重新生成。');
+      setError('请先填写对当前导演分镜图/关键帧的不满意点，系统会用这段反馈重新生成。');
       return;
     }
     setActiveStep(3);
@@ -953,20 +981,21 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
     if (!workspace.latestExport && workspace.timeline) {
       setStep6LockedAction('trigger-export');
       const exportRecord = await handleAction('trigger-export', () => workflowApi.triggerExport(projectId, '1080p'));
-      if (exportRecord?.storage_uri) {
-        triggerBrowserDownload(exportRecord.storage_uri, makeExportFilename(projectId, exportRecord));
-        setStep6LockedAction('download-export');
-      } else if (exportRecord) {
-        setError('导出已完成，但后端没有返回可下载地址。请刷新后再试。');
+      if (exportRecord) {
+        const blob = await handleAction('download-export', () => projectApi.downloadLatestExport(projectId));
+        if (blob) {
+          triggerBlobDownload(blob, makeExportFilename(projectId, exportRecord));
+          setStep6LockedAction('download-export');
+        }
       }
       return;
     }
-    if (workspace.latestExport?.storage_uri) {
-      triggerBrowserDownload(
-        workspace.latestExport.storage_uri,
-        makeExportFilename(projectId, workspace.latestExport)
-      );
-      setStep6LockedAction('download-export');
+    if (workspace.latestExport) {
+      const blob = await handleAction('download-export', () => projectApi.downloadLatestExport(projectId));
+      if (blob) {
+        triggerBlobDownload(blob, makeExportFilename(projectId, workspace.latestExport));
+        setStep6LockedAction('download-export');
+      }
       return;
     }
     if (workspace.timeline?.preview_uri) {
@@ -1069,11 +1098,11 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
   const isProjectFailed = workspace.project.current_stage === 'failed';
   const isStoryboardFailed = isProjectFailed && !workspace.storyboardGrids.length;
   const primaryStep3Label = isStoryboardFailed
-    ? isTalkingHeadProject ? '重试故事大图生成' : '重试关键帧生成'
+    ? isTalkingHeadProject ? '重试导演分镜图生成' : '重试关键帧生成'
     : !workspace.storyboardGrids.length
     ? '等待创意剧本确认'
     : storyboardDecision
-      ? (storyboardConfirmOption?.title || storyboardConfirmOption?.label || (isTalkingHeadProject ? '确认故事大图并开始生成视频' : '确认关键帧并开始生成视频'))
+      ? (storyboardConfirmOption?.title || storyboardConfirmOption?.label || (isTalkingHeadProject ? '确认导演分镜图并开始生成视频' : '确认关键帧并开始生成视频'))
     : isClipStageActive
       ? '视频生成中'
     : isProjectFailed
@@ -1081,7 +1110,7 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
     : workspace.clips.length < sortedShots.length
         ? storyboardConfirmed
           ? workspace.clips.length ? '继续生成视频' : '生成视频'
-          : isTalkingHeadProject ? '等待故事大图确认' : '等待关键帧确认'
+          : isTalkingHeadProject ? '等待导演分镜图确认' : '等待关键帧确认'
         : '下一镜头';
   const primaryStep6Label = !workspace.timeline
     ? '本地拼接'
@@ -1363,7 +1392,7 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
                         </div>
                       ) : (
                         <div className="rounded-lg border border-dashed border-gray-200 bg-gray-50 px-3 py-4 text-center text-xs text-gray-400">
-                          可选上传；上传后创作、故事大图、视频提示词都会明确引用产品图。
+                          可选上传；上传后创作、导演分镜图、视频提示词都会明确引用产品图。
                         </div>
                       )}
                     </div>
@@ -1412,7 +1441,7 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
                   </div>
                   {creativePackageDecision ? (
                     <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-                      创意剧本包已生成，确认后进入故事大图生成；也可以重新生成当前剧本包。
+                      创意剧本包已生成，确认后进入导演分镜图生成；也可以重新生成当前剧本包。
                     </div>
                   ) : null}
                   <div className="min-h-0 flex-1 overflow-y-auto rounded-2xl border border-gray-100 bg-white">
@@ -1556,7 +1585,7 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
                       disabled={Boolean(actionLoading) || !creativePackageDecision}
                       className="inline-flex items-center gap-2 rounded-xl bg-violet-600 px-5 py-2.5 text-sm font-medium text-white shadow-lg shadow-violet-200 hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-60"
                     >
-                      {actionLoading === 'generate-storyboard' ? '故事大图生成中...' : step2PrimaryLabel} <ArrowRight className="h-4 w-4" />
+                      {actionLoading === 'generate-storyboard' ? '导演分镜图生成中...' : step2PrimaryLabel} <ArrowRight className="h-4 w-4" />
                     </button>
                     </div>
                   </div>
@@ -1567,14 +1596,14 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
 
           {activeStep === 3 ? (
             <>
-              <StepBadge step="3" title={isTalkingHeadProject ? '故事大图 / Production Board' : '关键帧画面'} />
-              {!workspace.storyboardGrids.length && !isStoryboardFailed ? renderLoadingState('故事大图生成中', '前端正在等待后端返回 Production Board。生成完成后会在这里展示大图与 Segment 读取说明。') : (
+              <StepBadge step="3" title={isTalkingHeadProject ? '导演分镜图 / Director Shot List' : '关键帧画面'} />
+              {!workspace.storyboardGrids.length && !isStoryboardFailed ? renderLoadingState('导演分镜图生成中', '前端正在等待后端返回 Director Shot List。生成完成后会在这里展示大图与 shot 行读取说明。') : (
                 <div className="flex min-h-0 flex-1 flex-col">
                   <div className="mb-4 grid gap-3">
                     <div className="flex items-center justify-between gap-3">
                     <div className="text-sm text-gray-600">
                       {isTalkingHeadProject
-                        ? `一张 21:9 故事大图 · ${storyOverviewSegments.length || scriptShots.length || 0} 个 Segment`
+                        ? `一张 21:9 导演分镜图 · ${storyOverviewSegments.length || scriptShots.length || 0} 个 shot`
                         : `镜头 ${(activeShot?.shot_index ?? activeNarrativeShot?.shot_index ?? selectedShotIndex) + 1}`}
                     </div>
                     <button
@@ -1596,18 +1625,18 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
                   </div>
                   <button
                     type="button"
-                    onClick={() => storyOverviewUrl && setImagePreview({ title: 'Story Overview Board', url: storyOverviewUrl, description: selectedSegment?.reading_instruction || '口播故事大图' })}
+                    onClick={() => storyOverviewUrl && setImagePreview({ title: 'Director Shot List', url: storyOverviewUrl, description: selectedSegment?.reading_instruction || '口播导演分镜图' })}
                     disabled={!storyOverviewUrl}
                     className="relative min-h-0 flex-1 overflow-hidden rounded-2xl bg-gray-100 text-left disabled:cursor-default"
                   >
                     {storyOverviewUrl ? (
-                      <img src={storyOverviewUrl} className="h-full w-full object-contain bg-black" alt="Story Overview Board" />
+                      <img src={storyOverviewUrl} className="h-full w-full object-contain bg-black" alt="Director Shot List" />
                     ) : (
-                      <div className="flex h-full items-center justify-center text-sm text-gray-400">等待故事大图</div>
+                      <div className="flex h-full items-center justify-center text-sm text-gray-400">等待导演分镜图</div>
                     )}
                     {storyOverviewSegments.length ? (
                       <div className="absolute bottom-3 left-3 right-3 rounded-xl bg-white/90 px-4 py-3 text-sm text-gray-700 shadow-sm">
-                        {storyOverviewSegments.length} 个 Segment 已写入同一张 Production Board，视频阶段逐段读取对应区域。
+                        {storyOverviewSegments.length} 个 shot 已写入同一张导演分镜图，视频阶段逐行读取对应镜头。
                       </div>
                     ) : null}
                   </button>
@@ -1617,7 +1646,7 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
                       disabled={!workspace.storyboardGrids.length}
                       className="inline-flex items-center gap-2 rounded-xl bg-violet-600 px-5 py-2.5 text-sm font-medium text-white shadow-lg shadow-violet-200 hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-60"
                     >
-                      确认故事大图 <ArrowRight className="h-4 w-4" />
+                      确认导演分镜图 <ArrowRight className="h-4 w-4" />
                     </button>
                   </div>
                 </div>
@@ -1631,16 +1660,16 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
               <div className="grid min-h-0 flex-1 grid-cols-[1fr_360px] gap-5 overflow-hidden">
                 <div className="relative overflow-hidden rounded-2xl bg-gray-100">
                   {storyOverviewUrl ? (
-                    <img src={storyOverviewUrl} className="h-full w-full object-contain bg-black" alt="Story Overview Board" />
-                  ) : renderLoadingState('等待故事大图', '需要先完成故事大图后才能确认进入视频生成。')}
+                    <img src={storyOverviewUrl} className="h-full w-full object-contain bg-black" alt="Director Shot List" />
+                  ) : renderLoadingState('等待导演分镜图', '需要先完成导演分镜图后才能确认进入视频生成。')}
                 </div>
                 <div className="flex flex-col rounded-2xl border border-gray-100 bg-gray-50 p-5">
                   <h4 className="text-lg font-bold text-gray-900">生成前确认</h4>
                   <p className="mt-2 text-sm leading-6 text-gray-600">
-                    当前故事大图会作为所有 15 秒 Segment 的统一视觉参考。确认后，系统会开始生成每个视频片段，这是高成本阶段。
+                    当前导演分镜图会作为所有 15 秒 shot 的统一视觉参考。确认后，系统会开始生成每个视频片段，这是高成本阶段。
                   </p>
                   <div className="mt-5 space-y-3 text-sm text-gray-600">
-                    <div className="rounded-xl bg-white p-3">Segment 数：{storyOverviewSegments.length || scriptShots.length || 0}</div>
+                    <div className="rounded-xl bg-white p-3">Shot 数：{storyOverviewSegments.length || scriptShots.length || 0}</div>
                     <div className="rounded-xl bg-white p-3">目标时长：{form.duration}秒</div>
                     <div className="rounded-xl bg-white p-3">最终比例：{workspace.spec?.output_config?.aspect_ratio || FIXED_ASPECT_RATIO}</div>
                   </div>
@@ -1658,7 +1687,7 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
 
           {activeStep === 5 ? (
             <>
-              <StepBadge step="5" title={allClipsReady ? '视频片段已生成' : '视频生成中'} />
+              <StepBadge step="5" title={isProjectFailed && !isStoryboardFailed ? '视频生成失败' : allClipsReady ? '视频片段已生成' : '视频生成中'} />
               <div className="grid min-h-0 flex-1 grid-cols-[1fr_360px] gap-5 overflow-hidden">
                 <div className="flex min-h-0 flex-col">
                   <div className="relative min-h-0 flex-1 overflow-hidden rounded-2xl border border-gray-200 bg-black">
@@ -1666,7 +1695,11 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
                       <video ref={videoRef} src={previewMedia} className="absolute inset-0 h-full w-full bg-black object-contain" controls playsInline onEnded={handlePreviewEnded} onError={handlePreviewError} />
                     ) : (
                       <div className="flex h-full flex-col items-center justify-center text-sm text-gray-300">
-                        {workspace.clips.length ? '选择右侧片段播放' : '视频片段生成中'}
+                        {isProjectFailed && !isStoryboardFailed
+                          ? '视频生成失败，请查看右侧失败原因后重试'
+                          : workspace.clips.length
+                            ? '选择右侧片段播放'
+                            : '视频片段生成中'}
                       </div>
                     )}
                   </div>
@@ -1682,6 +1715,19 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
                   </div>
                 </div>
                 <div className="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-gray-100 bg-gray-50 p-4">
+                  {isProjectFailed && !isStoryboardFailed ? (
+                    <div className="mb-3 shrink-0 rounded-xl border border-red-100 bg-red-50 p-3 text-xs text-red-700">
+                      <div className="mb-1 font-semibold text-red-800">视频生成阶段失败</div>
+                      <div className="mb-2 leading-5">后端已进入 failed，失败镜头可单独重试，也可以重新触发整个视频生成阶段。</div>
+                      <button
+                        onClick={() => void handleRetryClipStage()}
+                        disabled={Boolean(actionLoading)}
+                        className="inline-flex items-center gap-1.5 rounded-lg bg-red-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        <RefreshCw className={`h-3 w-3 ${actionLoading === 'retry-generate-clips' ? 'animate-spin' : ''}`} /> 重试视频生成阶段
+                      </button>
+                    </div>
+                  ) : null}
                   <h4 className="mb-3 text-sm font-bold text-gray-900">片段列表</h4>
                   <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
                     {sortedShots.map((shot, index) => {
@@ -1689,8 +1735,19 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
                       const shotCells = shotCellsByShotId.get(shot.id) ?? [];
                       const thumb = isTalkingHeadProject ? storyOverviewUrl : shotCells[0]?.asset_url;
                       const isFailed = shot.status === 'failed' && !clip;
+                      const failureMessage = shot.last_failure?.message || '视频生成失败，后端未返回更详细原因。';
+                      const shotActionKey = `regenerate-shot-${shot.id}`;
                       return (
-                        <div key={shot.id} className={`rounded-xl border p-3 ${shot.id === activeShot?.id ? 'border-violet-200 bg-violet-50' : 'border-gray-100 bg-white'}`}>
+                        <div
+                          key={shot.id}
+                          className={`rounded-xl border p-3 ${
+                            isFailed
+                              ? 'border-red-100 bg-red-50/60'
+                              : shot.id === activeShot?.id
+                                ? 'border-violet-200 bg-violet-50'
+                                : 'border-gray-100 bg-white'
+                          }`}
+                        >
                           <div className="flex items-center gap-3">
                             <div className="h-12 w-12 shrink-0 overflow-hidden rounded-lg bg-gray-100">
                               {thumb ? <img src={thumb} className={`h-full w-full object-cover ${clip ? '' : 'opacity-50 grayscale'}`} alt="" /> : null}
@@ -1698,6 +1755,11 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
                             <div className="min-w-0 flex-1">
                               <div className="truncate text-sm font-medium text-gray-900">{isTalkingHeadProject ? `Shot ${shot.shot_index + 1} · Segment ${shot.shot_index + 1}` : `镜头 ${shot.shot_index + 1}`}</div>
                               <div className="text-xs text-gray-400">{formatTimeRange(shot)} · {clip ? '已生成' : isFailed ? '生成失败' : '等待生成'}</div>
+                              {isFailed ? (
+                                <div className="mt-1 truncate text-xs text-red-600" title={failureMessage}>
+                                  失败原因：{failureMessage}
+                                </div>
+                              ) : null}
                             </div>
                             {clip ? (
                               <button
@@ -1713,7 +1775,7 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
                               </button>
                             ) : isFailed ? (
                               <button onClick={() => void handleRegenerateShot(shot.id)} disabled={Boolean(actionLoading)} className="inline-flex items-center gap-1 rounded-lg border border-red-200 bg-white px-3 py-2 text-xs font-medium text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60">
-                                <RefreshCw className="h-3 w-3" /> 重试
+                                <RefreshCw className={`h-3 w-3 ${actionLoading === shotActionKey ? 'animate-spin' : ''}`} /> 重试
                               </button>
                             ) : null}
                           </div>
@@ -1723,7 +1785,7 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
                   </div>
                   <button
                     onClick={() => setActiveStep(6)}
-                    disabled={!workspace.clips.length}
+                    disabled={!allClipsReady && !workspace.timeline && !workspace.latestExport}
                     className="mt-4 inline-flex items-center justify-center gap-2 rounded-xl bg-violet-600 px-5 py-3 text-sm font-medium text-white shadow-lg shadow-violet-200 hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-60"
                   >
                     进入拼接与导出 <ArrowRight className="h-4 w-4" />
@@ -1755,7 +1817,7 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
                     <div>时长：{formatDurationLabel(workspace.timeline?.total_duration_ms || activeClip?.duration_ms || 30000)}</div>
                     <div>分辨率：{ratioToResolution(workspace.spec?.output_config?.aspect_ratio, workspace.spec?.output_config?.video_resolution || workspace.latestExport?.resolution)}</div>
                     <div>最终比例：{workspace.spec?.output_config?.aspect_ratio || '--'}</div>
-                    {isTalkingHeadProject ? <div>故事大图：{workspace.spec?.output_config?.story_board_aspect_ratio || '21:9'}</div> : null}
+                    {isTalkingHeadProject ? <div>导演分镜图：{workspace.spec?.output_config?.story_board_aspect_ratio || '21:9'}</div> : null}
                     <div>生成时间：{new Date(workspace.latestExport?.created_at || workspace.project.updated_at).toLocaleString()}</div>
                   </div>
                   <div className="flex flex-col gap-2">
@@ -1940,7 +2002,7 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
                       </div>
                     ) : (
                       <div className="rounded-lg border border-dashed border-gray-200 bg-gray-50 px-3 py-4 text-center text-[11px] text-gray-400">
-                        可选上传；上传后创作、故事大图、视频提示词都会明确引用产品图。
+                          可选上传；上传后创作、导演分镜图、视频提示词都会明确引用产品图。
                       </div>
                     )}
                   </div>
@@ -1977,7 +2039,7 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
           <div className="col-span-4 w-full h-full min-h-0">
             <Card className="w-full h-full overflow-hidden">
               <StepBadge step="2" title="创意剧本包" />
-              <p className="text-gray-500 text-xs mb-3 shrink-0">AI 一次性生成口播创意方向和 15 秒分段脚本，确认后进入故事大图生成</p>
+              <p className="text-gray-500 text-xs mb-3 shrink-0">AI 一次性生成口播创意方向和 15 秒分段脚本，确认后进入导演分镜图生成</p>
 
               <div className="flex items-center gap-3 text-xs text-gray-600 mb-3 bg-gray-50 p-2.5 rounded-lg border border-gray-100 shrink-0 overflow-x-auto">
                 <div><span className="text-gray-400">视频主题:</span> <span className="font-medium text-gray-900">{safeText(workspace.brief?.title, '待生成')}</span></div>
@@ -1989,7 +2051,7 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
               {creativePackageDecision ? (
                 <div className="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 shrink-0">
                   <div className="font-semibold mb-1">创意剧本包已生成，等待确认</div>
-                  <div className="text-amber-700">确认后会进入故事大图生成；选择重新生成会重新生成创意方向和分段脚本。</div>
+                  <div className="text-amber-700">确认后会进入导演分镜图生成；选择重新生成会重新生成创意方向和分段脚本。</div>
                 </div>
               ) : null}
 
@@ -2035,21 +2097,21 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
 
           <div className="col-span-5 w-full h-full min-h-0">
             <Card className="w-full h-full overflow-hidden">
-              <StepBadge step="3" title={isTalkingHeadProject ? '故事大图 / Production Board' : '生成关键帧画面'} />
+              <StepBadge step="3" title={isTalkingHeadProject ? '导演分镜图 / Director Shot List' : '生成关键帧画面'} />
               <p className="text-gray-500 text-xs mb-3 shrink-0">
                 {isTalkingHeadProject
-                  ? 'AI 生成一张覆盖完整视频的 21:9 故事大图，后续每个 15 秒 clip 读取对应 Segment 区域'
+                  ? 'AI 生成一张覆盖完整视频的 21:9 导演分镜图，后续每个 15 秒 clip 读取对应 shot 行'
                   : 'AI 为每个镜头生成起始 / 中间 / 结尾三张关键帧，后续将按多图融合模式生成视频'}
               </p>
 
               <div className="flex items-center justify-between mb-3 shrink-0 gap-4">
                 <div className="flex items-center gap-3 min-w-0">
                   <span className="text-sm text-gray-600 shrink-0">
-                    {isTalkingHeadProject ? 'Story Overview Board：' : '镜头选择：'}
+                    {isTalkingHeadProject ? 'Director Shot List：' : '镜头选择：'}
                   </span>
                   {isTalkingHeadProject ? (
                     <span className="rounded-full bg-violet-50 px-3 py-1 text-xs font-medium text-violet-700">
-                      一张大图 · {scriptShots.length || storyOverviewSegments.length || 0} 个 15s Segment
+                      一张导演图 · {scriptShots.length || storyOverviewSegments.length || 0} 个 15s shot
                     </span>
                   ) : (
                     <div className="flex gap-2 overflow-x-auto">
@@ -2071,27 +2133,27 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
               {creativePackageDecision ? (
                 <div className="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 shrink-0">
                   <div className="font-semibold mb-1">等待确认创意剧本包</div>
-                  <div className="text-amber-700">确认 Step 2 后会开始生成故事大图。</div>
+                  <div className="text-amber-700">确认 Step 2 后会开始生成导演分镜图。</div>
                 </div>
               ) : null}
 
               {storyboardDecision ? (
                 <div className="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 shrink-0">
-                  <div className="font-semibold mb-1">{isTalkingHeadProject ? '故事大图已生成，等待确认' : '关键帧已生成，等待确认'}</div>
-                  <div className="text-amber-700">确认后会进入视频生成；选择重新生成会重新生成{isTalkingHeadProject ? '故事大图' : '关键帧'}。</div>
+                  <div className="font-semibold mb-1">{isTalkingHeadProject ? '导演分镜图已生成，等待确认' : '关键帧已生成，等待确认'}</div>
+                  <div className="text-amber-700">确认后会进入视频生成；选择重新生成会重新生成{isTalkingHeadProject ? '导演分镜图' : '关键帧'}。</div>
                 </div>
               ) : null}
 
               {isStoryboardFailed ? (
                 <div className="mb-3 rounded-xl border border-red-100 bg-red-50 px-3 py-2 text-xs text-red-700 shrink-0">
-                  <div className="font-semibold text-red-800 mb-1">{isTalkingHeadProject ? '故事大图生成失败' : '关键帧生成失败'}</div>
-                  <div className="mb-2">上一次{isTalkingHeadProject ? '故事大图' : '三宫格生图'}没有生成可用结果，可以直接重试图片生成阶段。</div>
+                  <div className="font-semibold text-red-800 mb-1">{isTalkingHeadProject ? '导演分镜图生成失败' : '关键帧生成失败'}</div>
+                  <div className="mb-2">上一次{isTalkingHeadProject ? '导演分镜图' : '三宫格生图'}没有生成可用结果，可以直接重试图片生成阶段。</div>
                   <button
                     onClick={() => void handleRegenerateKeyframes()}
                     disabled={Boolean(actionLoading)}
                     className="inline-flex items-center gap-1.5 rounded-lg bg-red-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60"
                   >
-                    <RefreshCw className={`w-3 h-3 ${actionLoading === 'regenerate-storyboard' ? 'animate-spin' : ''}`} /> 重试{isTalkingHeadProject ? '故事大图' : '关键帧生成'}
+                    <RefreshCw className={`w-3 h-3 ${actionLoading === 'regenerate-storyboard' ? 'animate-spin' : ''}`} /> 重试{isTalkingHeadProject ? '导演分镜图' : '关键帧生成'}
                   </button>
                 </div>
               ) : null}
@@ -2100,10 +2162,10 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
                 <div className="flex items-center gap-2 text-violet-600 font-medium text-xs mb-2 shrink-0">
                   <span className="w-1 h-3 border-l-2 border-violet-600 rounded"></span>
                   {isTalkingHeadProject
-                    ? `Story Overview Board · ${storyOverviewSegments.length || scriptShots.length || 0} 个 Segment`
+                    ? `Director Shot List · ${storyOverviewSegments.length || scriptShots.length || 0} 个 shot`
                     : `${activeShot ? '镜头' : '镜头'} ${activeShot ? activeShot.shot_index + 1 : activeNarrativeShot ? (activeNarrativeShot.shot_index ?? selectedShotIndex) + 1 : '--'}：${activeShot ? formatTimeRange(activeShot) : activeNarrativeShot ? formatScriptTimeRange(activeNarrativeShot, narrativeShots, selectedShotIndex) : '--'}`}
                   <span className="text-gray-400 font-normal ml-2">
-                    | {isTalkingHeadProject ? '同一张故事大图供后续每个 15 秒 clip 读取对应区域' : safeText(startCell?.scene_description || activeShot?.subject || activeNarrativeShot?.action_description || activeNarrativeShot?.scene_description)}
+                    | {isTalkingHeadProject ? '同一张导演分镜图供后续每个 15 秒 clip 读取对应行' : safeText(startCell?.scene_description || activeShot?.subject || activeNarrativeShot?.action_description || activeNarrativeShot?.scene_description)}
                   </span>
                 </div>
 
@@ -2113,25 +2175,25 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
                     onClick={() => {
                       if (!storyOverviewUrl) return;
                       setImagePreview({
-                        title: 'Story Overview Board',
+                        title: 'Director Shot List',
                         url: storyOverviewUrl,
-                        description: selectedSegment?.reading_instruction || '口播故事大图',
+                        description: selectedSegment?.reading_instruction || '口播导演分镜图',
                       });
                     }}
                     disabled={!storyOverviewUrl}
                     className="relative group rounded-xl overflow-hidden mb-3 flex-1 min-h-0 bg-gray-100 text-left disabled:cursor-default"
                   >
                     {storyOverviewUrl ? (
-                      <img src={storyOverviewUrl} className="w-full h-full object-contain bg-gray-950" alt="Story Overview Board" />
+                      <img src={storyOverviewUrl} className="w-full h-full object-contain bg-gray-950" alt="Director Shot List" />
                     ) : (
-                      <div className="w-full h-full flex items-center justify-center px-3 text-center text-xs text-gray-500">等待生成故事大图</div>
+                      <div className="w-full h-full flex items-center justify-center px-3 text-center text-xs text-gray-500">等待生成导演分镜图</div>
                     )}
                     <div className="absolute top-2 left-2 rounded-lg bg-black/55 px-2 py-1 text-[10px] font-medium text-white">
-                      Story Overview Board · 21:9
+                      Director Shot List · 21:9
                     </div>
                     {storyOverviewSegments.length ? (
                       <div className="absolute bottom-2 left-2 right-2 rounded-lg bg-white/90 px-3 py-2 text-[11px] text-gray-700 shadow-sm">
-                        {storyOverviewSegments.length} 个 Segment 已写入同一张 Production Board，视频阶段逐段读取对应区域。
+                        {storyOverviewSegments.length} 个 shot 已写入同一张导演分镜图，视频阶段逐行读取对应镜头。
                       </div>
                     ) : null}
                   </button>
@@ -2185,7 +2247,7 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
                           .map((shot, index) => `S${(shot.shot_index ?? index) + 1}: ${shot.dialogue || shot.lyric_text || ''}`)
                           .filter(Boolean)
                           .join('  /  '),
-                        '故事大图会覆盖所有 Segment 的口播文案'
+                        '导演分镜图会覆盖所有 shot 的口播文案'
                       )
                     : safeText(activeShot?.dialogue || activeShot?.lyric_text || activeNarrativeShot?.dialogue || activeNarrativeShot?.lyric_text, '当前镜头暂无文案')}
                 </div>
@@ -2204,9 +2266,9 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
                     onClick={() => {
                       if (!activeGridOriginalUrl) return;
                       setImagePreview({
-                        title: isTalkingHeadProject ? 'Story Overview Board' : `三宫格原图${activeGrid?.grid_index ? ` ${activeGrid.grid_index}` : ''}`,
+                        title: isTalkingHeadProject ? 'Director Shot List' : `三宫格原图${activeGrid?.grid_index ? ` ${activeGrid.grid_index}` : ''}`,
                         url: activeGridOriginalUrl,
-                        description: isTalkingHeadProject ? '后端返回的口播故事大图' : '后端返回的三宫格原始大图',
+                        description: isTalkingHeadProject ? '后端返回的口播导演分镜图' : '后端返回的三宫格原始大图',
                       });
                     }}
                     disabled={!activeGridOriginalUrl}
@@ -2248,7 +2310,7 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
               <StepBadge step="5" title="视频生成中" />
               <p className="text-gray-500 text-xs mb-4 shrink-0">
                 {isTalkingHeadProject
-                  ? 'AI 根据固定人物参考、同一故事大图和声色参考生成每个 15 秒口播视频片段，并准备拼接时间线'
+                  ? 'AI 根据固定人物参考、同一导演分镜图和声色参考生成每个 15 秒口播视频片段，并准备拼接时间线'
                   : 'AI 根据每个镜头的三张关键帧做多图融合生成视频片段，并准备拼接时间线'}
               </p>
 
@@ -2309,7 +2371,7 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
                               {isTalkingHeadProject ? `Shot ${shot.shot_index + 1} · Segment ${shot.shot_index + 1}` : `镜头 ${shot.shot_index + 1}`}
                             </div>
                             <div className="text-[10px] text-gray-400">
-                              {formatTimeRange(shot)} · {isTalkingHeadProject ? '故事大图复用' : '三图融合'}
+                              {formatTimeRange(shot)} · {isTalkingHeadProject ? '导演图复用' : '三图融合'}
                             </div>
                             {isFailed ? (
                               <div className="mt-1 max-w-[260px] truncate text-[10px] text-red-600" title={failureMessage}>
@@ -2363,7 +2425,7 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
                       : workspace.clips.length
                         ? `${workspace.clips.length} 个视频片段已就绪，下一步可在 Step 6 触发拼接。`
                         : isTalkingHeadProject
-                          ? '先完成故事大图与每个 Segment 的视频生成，随后才能拼接导出。'
+                          ? '先完成导演分镜图与每个 shot 的视频生成，随后才能拼接导出。'
                           : '先完成每个镜头的三图关键帧与融合生成，随后才能拼接导出。'}
                   </p>
                 </div>
@@ -2417,7 +2479,7 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
                     <div className="flex items-center gap-1.5"><div className="w-4 flex justify-center"><Video className="w-3 h-3" /></div>时长：{formatDurationLabel(workspace.timeline?.total_duration_ms || activeClip?.duration_ms || 30000)}</div>
                     <div className="flex items-center gap-1.5"><div className="w-4 flex justify-center"><CheckCircle2 className="w-3 h-3" /></div>分辨率：{ratioToResolution(workspace.spec?.output_config?.aspect_ratio, workspace.spec?.output_config?.video_resolution || workspace.latestExport?.resolution)}</div>
                     {isTalkingHeadProject ? (
-                      <div className="flex items-center gap-1.5"><div className="w-4 flex justify-center"><Maximize className="w-3 h-3" /></div>故事大图：{workspace.spec?.output_config?.story_board_aspect_ratio || '21:9'}</div>
+                      <div className="flex items-center gap-1.5"><div className="w-4 flex justify-center"><Maximize className="w-3 h-3" /></div>导演分镜图：{workspace.spec?.output_config?.story_board_aspect_ratio || '21:9'}</div>
                     ) : null}
                     <div className="flex items-center gap-1.5"><div className="w-4 flex justify-center"><RefreshCw className="w-3 h-3" /></div>最终比例：{workspace.spec?.output_config?.aspect_ratio || '--'}</div>
                     {isTalkingHeadProject ? (

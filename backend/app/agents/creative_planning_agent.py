@@ -186,6 +186,14 @@ class CreativePlanningAgent:
         storyboard_layout = task_spec.get("storyboard_layout") or triptych_plan.get("storyboard_layout")
         scene_reference_url = str(task_spec.get("scene_reference_url") or "").strip()
         scene_reference_role = str(task_spec.get("scene_reference_role") or "").strip()
+        regeneration_feedback = task_spec.get("regeneration_feedback") or {}
+        regeneration_feedback_text = str(regeneration_feedback.get("feedback_text") or "").strip()
+        product_reference_urls = [
+            str(url).strip()
+            for url in (task_spec.get("product_reference_urls") or [])
+            if str(url).strip()
+        ][:3]
+        product_reference_role = str(task_spec.get("product_reference_role") or "").strip()
         is_talking_head = (
             generation_profile == TALKING_HEAD_PROFILE
             or storyboard_layout == TALKING_HEAD_LAYOUT
@@ -220,12 +228,29 @@ class CreativePlanningAgent:
             f"生成规格：video_resolution={video_resolution}，image_resolution={image_resolution}，image_size={image_size or '按画幅默认'}\n"
             f"真人入镜要求：{human_on_camera_text}\n\n"
             + (
+                f"本轮重新生成反馈：{regeneration_feedback_text}\n"
+                "必须基于这条反馈重新设计 creative_brief、style_bible、场景策略和剧本基调，"
+                "不要只是重复上一版方向；仍需保留有效的时长、画幅、产品图和固定场地图约束。\n\n"
+                if regeneration_feedback_text
+                else ""
+            )
+            + (
                 "固定场地参考图：本次输入附带 1 张 image_url 图片附件。"
                 f"{scene_reference_role or '它是固定场地/场景参考图'}，"
                 "请先观察该图片的空间结构、场地属性、布景、桌面关系、背景材质、光线和氛围，"
                 "再展开 creative_brief、style_bible、set_design_profile、reference_notes 和后续场景策略。"
                 "不要把这张图当作人物图或产品图；不要发散到与该场地冲突的新空间。\n\n"
                 if scene_reference_url
+                else ""
+            )
+            + (
+                f"产品参考图：本次输入附带 {len(product_reference_urls)} 张 image_url 产品图片附件。"
+                f"{product_reference_role or '它们是产品参考图'}，"
+                "请观察产品外观、包装、材质、颜色、核心卖点可视化角度、与场地/人物的摆放关系。"
+                "creative_brief.extension 必须写入 product_reference_profile，"
+                "style_bible.reference_notes 必须包含产品图观察结论，供后续剧本、分镜和视频 prompt 继承。"
+                "不要把产品图当作人物图；不要忽略产品真实外观。\n\n"
+                if product_reference_urls
                 else ""
             )
             + (
@@ -259,13 +284,15 @@ class CreativePlanningAgent:
             tools = [t for t in [read_artifact_tool, write_artifact_tool] if t is not None]
             agent = create_react_agent(model=llm, tools=tools)
             human_message: HumanMessage
+            image_parts = []
             if scene_reference_url:
-                human_message = HumanMessage(
-                    content=[
-                        {"type": "text", "text": task_msg},
-                        {"type": "image_url", "image_url": {"url": scene_reference_url}},
-                    ]
-                )
+                image_parts.append({"type": "image_url", "image_url": {"url": scene_reference_url}})
+            image_parts.extend(
+                {"type": "image_url", "image_url": {"url": url}}
+                for url in product_reference_urls
+            )
+            if image_parts:
+                human_message = HumanMessage(content=[{"type": "text", "text": task_msg}, *image_parts])
             else:
                 human_message = HumanMessage(content=task_msg)
             result = await agent.ainvoke(
@@ -444,6 +471,28 @@ class CreativePlanningAgent:
         output_extension["video_resolution"] = task_spec.get("video_resolution", "1080p")
         output_extension["image_resolution"] = task_spec.get("image_resolution", "2K")
         output_extension["image_size"] = task_spec.get("image_size") or "16:9"
+        scene_reference_url = str(task_spec.get("scene_reference_url") or "").strip()
+        product_reference_urls = [
+            str(url).strip()
+            for url in (task_spec.get("product_reference_urls") or [])
+            if str(url).strip()
+        ][:3]
+        if scene_reference_url:
+            output_extension["scene_reference_profile"] = {
+                "role": task_spec.get("scene_reference_role") or "固定场地/场景参考图",
+                "url": scene_reference_url,
+                "observation": "已提供固定场地参考图，后续场景应围绕该空间、布景、光线和桌面关系展开。",
+            }
+        if product_reference_urls:
+            output_extension["product_reference_profile"] = {
+                "role": task_spec.get("product_reference_role") or "产品参考图",
+                "urls": product_reference_urls,
+                "observation": "已提供产品参考图，后续创意、剧本、分镜和视频 prompt 应继承产品外观、包装、颜色、材质和卖点呈现。",
+            }
+            fb["style_bible"]["reference_notes"] = (
+                "产品参考图已作为创意输入：后续应保留产品真实外观、包装、颜色、材质和使用场景；"
+                + (fb["style_bible"].get("reference_notes") or "")
+            )
         if generation_profile == TALKING_HEAD_PROFILE or storyboard_layout == TALKING_HEAD_LAYOUT:
             output_extension["character_list"] = [
                 {

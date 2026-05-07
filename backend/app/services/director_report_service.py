@@ -135,6 +135,18 @@ class DirectorReportService:
         # ---- 步骤 3: 加载对话历史 --------------------------------------------
         history = await self._conv_svc.load_history_for_llm(session_id, limit=10)
 
+        # 视频片段生成是无文本产物的后台完成事件。这里不再唤起 Director LLM，
+        # 避免模型误调用 read_artifact_tool 读取空 ArtifactRef，产生“unknown”噪音。
+        if task_type == "generate_clips":
+            report_message = _build_clip_report_message(task_result)
+            await self._save_and_emit_report(
+                project_id=project_id,
+                session_id=session_id,
+                task_type=task_type,
+                report_message=report_message,
+            )
+            return
+
         # ---- 步骤 4: 尝试加载对应任务的 ArtifactRef 供审核（DESIGN-06） ----
         artifact_ref_for_review: dict | None = None
         task_cfg = _TASK_CONFIG.get(task_type)  # None 表示无文本产物引用
@@ -177,6 +189,23 @@ class DirectorReportService:
             return
 
         # ---- 步骤 6: 持久化汇报消息 ------------------------------------------
+        await self._save_and_emit_report(
+            project_id=project_id,
+            session_id=session_id,
+            task_type=task_type,
+            report_message=report_message,
+        )
+
+    async def _save_and_emit_report(
+        self,
+        *,
+        project_id: str,
+        session_id: str,
+        task_type: str,
+        report_message: str,
+    ) -> None:
+        """持久化汇报消息并推送 SSE。"""
+
         await self._conv_svc.save_assistant_message(
             session_id=session_id,
             content_text=report_message,
@@ -227,3 +256,32 @@ class DirectorReportService:
 # ---------------------------------------------------------------------------
 
 director_report_service = DirectorReportService()
+
+
+def _build_clip_report_message(task_result: dict[str, Any]) -> str:
+    """构造视频片段完成后的确定性总结，避免无产物任务触发工具型对话。"""
+
+    total = task_result.get("total") or task_result.get("total_shots")
+    succeeded = task_result.get("succeeded")
+    failed = task_result.get("failed") or task_result.get("failed_shot_count") or 0
+    clip_count = task_result.get("clip_count")
+    if succeeded is None:
+        succeeded = clip_count if clip_count is not None else "?"
+    if total is None:
+        total = succeeded if failed in (0, "0") else "?"
+
+    stage = task_result.get("project_stage") or ""
+    failed_count = int(failed) if isinstance(failed, int | float) else 0
+
+    if failed_count > 0 or stage == "failed":
+        return (
+            f"视频片段生成已完成处理：共 {total} 个镜头，成功 {succeeded} 个，失败 {failed} 个。\n\n"
+            "导演判断：当前不能进入最终合成，请先处理失败镜头或重试视频生成阶段。\n\n"
+            "下一步：建议先查看失败原因，修复后重新生成失败的视频片段。"
+        )
+
+    return (
+        f"视频片段已全部生成完成：共 {total} 个镜头，成功 {succeeded} 个，失败 0 个。\n\n"
+        "导演判断：当前视频片段已具备进入时间线合成的条件。\n\n"
+        "下一步：可以继续合成时间线，生成最终预览。"
+    )

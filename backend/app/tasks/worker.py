@@ -158,15 +158,34 @@ async def _handle_generate_clips(job: ToolJob) -> dict:
     )
     from app.repositories.project_repository import ProjectRepository  # noqa: PLC0415
     from app.repositories.unit_of_work import UnitOfWork  # noqa: PLC0415
+    from app.storage.local_artifact_store import LocalArtifactStore  # noqa: PLC0415
+    from app.storage.path_planner import ArtifactStage  # noqa: PLC0415
 
     current_stage = ""
     async with UnitOfWork() as uow:
         project = await ProjectRepository(uow.session).get_by_id(project_id)
         current_stage = project.current_stage if project is not None else ""
 
+    total_shots = len(clip_versions)
+    failed_shot_count = 0
+    try:
+        store = LocalArtifactStore(project_id)
+        summary_files = store.list_stage_files(ArtifactStage.CLIPS, "clips_summary_*.json")
+        if summary_files:
+            summary = store.read_json(summary_files[-1])
+            total_shots = summary.get("total_shots", total_shots)
+            failed_shot_count = summary.get("failed_shot_count", failed_shot_count)
+    except Exception as exc:  # noqa: BLE001
+        _logger.warning(
+            f"读取 clips_summary 失败，将使用 handler 返回的成功数: {exc!r}",
+            event_type="clips_summary_read_failed",
+        )
+
     return {
         "clip_count": len(clip_versions),
         "succeeded": len(clip_versions),
+        "total": total_shots,
+        "failed": failed_shot_count,
         "project_stage": current_stage,
     }
 

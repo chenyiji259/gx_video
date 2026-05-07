@@ -111,22 +111,22 @@ def _build_fallback_dialogues(user_prompt: str, total_shots: int) -> list[str]:
     topic = (user_prompt or "这个主题").strip()
     if len(topic) > 28:
         topic = topic[:28].rstrip("，。！？,.!?:：；; ")
-    generic_lines = [
-        f"今天用一分钟带你快速了解{topic}。",
-        "先别急着上脸，先弄清楚它真正能帮你解决什么问题。",
-        "很多人一开始用错频率，效果没看到，刺激却先来了。",
-        "正确做法是低频起步，先建立耐受，再慢慢增加使用次数。",
-        "如果你是敏感肌，一定要把保湿和修护放在同样重要的位置。",
-        "使用这类成分时，白天防晒要跟上，不然前面的努力容易打折。",
-        "和酸类、去角质一起叠太猛，反而更容易翻车。",
-        "记住核心原则：循序渐进，观察皮肤反馈，长期坚持才更稳。",
+    spoken_lines = [
+        f"{topic}别急着直接上脸，先把用法弄清楚。",
+        "你先少量、隔天试，第二天不红不刺，再往下走。",
+        "如果一开始就天天用，脸还没适应，刺激可能先来了。",
+        "这一步你记住：先稳住皮肤，再谈效果。",
+        "敏感肌更要慢一点，保湿和修护得跟上。",
+        "白天防晒别省，不然晚上做的功课容易打折。",
+        "酸类、去角质先别一起叠，脸扛不住就停一停。",
+        "看皮肤反馈来加频率，别跟别人比速度。",
     ]
     if _is_ad_prompt(user_prompt):
         sparse_lines = [""] * total_shots
         ad_lines = [
-            f"{topic}，这一支先帮你抓住最值得记住的核心卖点。",
-            "想少走弯路，就先从最关键的一步开始。",
-            "现在就把正确方法记下来，后面执行会轻松很多。",
+            f"{topic}先看这一点，别只盯包装。",
+            "你真正要判断的，是它能不能放进你的日常步骤里。",
+            "觉得适合，再继续看细节；不适合，就别硬跟。",
         ]
         sparse_positions = [0, max(0, total_shots // 2), max(0, total_shots - 1)]
         for idx, line in zip(sparse_positions, ad_lines):
@@ -142,7 +142,7 @@ def _build_fallback_dialogues(user_prompt: str, total_shots: int) -> list[str]:
         # 讲解类也不强制每个镜头说话，留出产品特写/转场镜头的无台词空间。
         if i in {1, 4} and total_shots >= 5:
             continue
-        explainer_lines[i] = generic_lines[min(i, len(generic_lines) - 1)]
+        explainer_lines[i] = spoken_lines[min(i, len(spoken_lines) - 1)]
     return explainer_lines
 
 
@@ -352,6 +352,10 @@ class NarrativeScriptAgent:
             f"允许的单 shot 时长档位：{', '.join(str(item) for item in allowed_shot_durations_sec)}\n\n"
             f"请先使用 read_artifact_tool 读取创意简报和风格圣经，尤其要读取 "
             f"creative_brief.extension.total_shots_generated、target_duration_sec、allowed_shot_durations_sec、character_list、aspect_ratio。"
+            f"如果 creative_brief.extension.scene_reference_profile 或 product_reference_profile 存在，"
+            f"必须继承其中的固定场地、产品外观、包装、材质、颜色、摆放关系和卖点呈现规则；"
+            f"style_bible.reference_notes 中的场地图/产品图观察结论必须进入 scenes、shots[*].scene_description、"
+            f"supporting_visuals 或 action_description，不得在剧本阶段丢失。"
             f"然后生成叙事剧本 JSON，根对象必须包含 story_arc / shots / characters / scenes。"
             f"其中 shots 必须是逐镜头数组，数量必须等于 {shot_count_total}；"
             f"每个 shot 的 duration_sec {'必须等于 15 秒' if is_talking_head else '必须从允许档位中选择，且不得超过 15 秒'}，全部 shot 的时长总和要等于或尽量贴近 target_duration_sec；"
@@ -369,14 +373,18 @@ class NarrativeScriptAgent:
             f"action_description / dialogue / audio_strategy / emotion / emotion_intensity。"
             + (
                 f"口播类每个 shot 还应尽量补充 segment_goal、time_range、speech_timing_plan、supporting_visuals，"
-                f"允许开场动画、产品特写、停顿或无对白片段；不要要求 15 秒全程说话；不要设计字幕。\n"
+                f"允许开场动画、产品特写、停顿或无对白片段；不要要求 15 秒全程说话；不要设计字幕。"
+                f"dialogue 必须像真人对具体观众说话：先判断观众困惑，再用短句完成提醒、纠偏、安抚或给下一步。"
+                f"每个 15 秒 shot 通常只放 1 个主判断和 1 个可执行做法，给画面、手势、产品特写留停顿。"
+                f"避免 AI 腔和模板开场，不要使用“今天带你快速了解”“核心原则是”“正确做法是”“很多人不知道”“少走弯路”“首先/其次/最后”等表达；"
+                f"少用抽象名词堆叠，把专业信息翻译成观众能判断的动作和感受，例如红不红、刺不刺、是否隔天用。\n"
                 if is_talking_head
                 else ""
             )
             +
             f"请先判断这是讲解类、广告类、剧情类还是纯视觉表达，再决定哪些 shot 的 dialogue 非空。"
             f"dialogue 字段必须存在，但不是每个 shot 都必须有实际台词内容。"
-            f"如果是讲解/旁白类视频，台词应作为整段连续文案拆分到若干关键 shot；"
+            f"如果是讲解/旁白类视频，台词应作为整段真人口播拆分到若干关键 shot；"
             f"如果是广告或氛围表达，可只在开头/结尾/CTA shot 放少量台词，其余 shot 留空。"
             f"shot_index 从 0 连续递增。"
             f"{regeneration_prompt_section}"

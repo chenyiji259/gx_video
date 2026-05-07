@@ -24,6 +24,8 @@ API 认证：
 from __future__ import annotations
 
 import asyncio
+import json
+import re
 from typing import Any, Optional
 
 import aiohttp
@@ -281,6 +283,46 @@ class SeedanceAdapter:
     # 内部：提交任务
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _redact_headers_for_log(headers: dict[str, str]) -> dict[str, str]:
+        redacted = dict(headers)
+        if "Authorization" in redacted:
+            redacted["Authorization"] = "Bearer ***"
+        return redacted
+
+    @staticmethod
+    def _format_prompt_for_log(payload: dict[str, Any]) -> str:
+        for item in payload.get("content", []):
+            if isinstance(item, dict) and item.get("type") == "text":
+                text = str(item.get("text") or "").strip()
+                text = re.sub(r"([。！？!?；;])\s*", "\\1\n", text)
+                return "\n".join(line.strip() for line in text.splitlines() if line.strip())
+        return ""
+
+    def _log_http_request_payload(
+        self,
+        *,
+        url: str,
+        headers: dict[str, str],
+        payload: dict[str, Any],
+    ) -> None:
+        redacted_headers = self._redact_headers_for_log(headers)
+        payload_json = json.dumps(payload, ensure_ascii=False, indent=2)
+        prompt_formatted = self._format_prompt_for_log(payload)
+        _logger.info(
+            "Seedance 2.0 原始 HTTP 请求参数:\n"
+            f"POST {url}\n"
+            f"headers={json.dumps(redacted_headers, ensure_ascii=False, indent=2)}\n"
+            f"payload={payload_json}\n"
+            f"prompt_formatted:\n{prompt_formatted}",
+            event_type="seedance_http_request_payload",
+            method="POST",
+            url=url,
+            headers=redacted_headers,
+            payload=payload,
+            prompt_formatted=prompt_formatted,
+        )
+
     async def _submit_task(self, payload: dict[str, Any]) -> str:
         url = f"{self._base_url}{_SUBMIT_PATH}"
         headers = {
@@ -288,6 +330,7 @@ class SeedanceAdapter:
             "Content-Type": "application/json",
         }
         timeout = aiohttp.ClientTimeout(total=self._timeout)
+        self._log_http_request_payload(url=url, headers=headers, payload=payload)
 
         try:
             async with aiohttp.ClientSession(timeout=timeout) as session:

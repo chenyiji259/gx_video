@@ -37,7 +37,10 @@ from app.repositories.planning_repositories import (
 from app.repositories.project_repository import ProjectRepository
 from app.repositories.project_spec_repository import ProjectSpecRepository
 from app.repositories.unit_of_work import UnitOfWork
+from app.repositories.asset_repository import AssetRepository
+from app.services.asset_access_service import build_asset_access_url
 from app.services.state_transition_service import state_transition_service
+from app.services.regeneration_context_service import regeneration_context_service
 from app.services.output_spec_service import (
     is_talking_head_config,
     normalize_output_config,
@@ -181,6 +184,7 @@ class BriefPersistenceService:
             allowed_stages = {
                 ProjectStage.INPUT_READY.value,   # 新流程：从 input_ready 直接生成 brief
                 ProjectStage.BRIEF_READY.value,   # 允许重新生成
+                ProjectStage.NARRATIVE_READY.value,  # 新 UI：创意剧本包整体重新生成
                 # ProjectStage.AUDIO_ANALYZED.value,  # 旧流程（音乐MV模式）：已停用
             }
             if project.current_stage not in allowed_stages:
@@ -220,6 +224,7 @@ class BriefPersistenceService:
             #         code="invalid_audio_range",
             #     )
             output_config: dict[str, Any] = normalize_output_config(spec.output_config)
+            reference_image_asset_ids = list(spec.reference_image_asset_ids or [])
             target_duration_sec = float(output_config.get("target_duration_sec", 15.0))
             aspect_ratio = output_config.get("aspect_ratio", "9:16")
             storyboard_plan = (
@@ -251,8 +256,23 @@ class BriefPersistenceService:
 
             brief_version_no = await CreativeBriefRepository(session).get_next_version_no(project_id)
             style_version_no = await StyleBibleRepository(session).get_next_version_no(project_id)
+            active_narrative_id = project.active_narrative_script_version_id
 
         scene_reference_url = await self._resolve_scene_reference_image_url(project_id)
+        product_reference_urls = await self._resolve_product_reference_image_urls(
+            project_id,
+            reference_image_asset_ids,
+        )
+        regeneration_feedback = await regeneration_context_service.get_latest_feedback(
+            project_id,
+            decision_type="confirm_narrative",
+            target_entity_id=active_narrative_id,
+        )
+        if regeneration_feedback:
+            logger.info(
+                "创意剧本包重新生成反馈已载入",
+                event_type="creative_package_regeneration_feedback_loaded",
+            )
 
         # ---- 步骤 2: 调用 CreativePlanningAgent.run_phase1() -------------------
         logger.info("开始生成 brief+style", event_type="brief_generation_start")
@@ -281,6 +301,9 @@ class BriefPersistenceService:
             "image_size": output_config.get("image_size"),
             "scene_reference_url": scene_reference_url,
             "scene_reference_role": "固定场地/场景参考图，用于创意规划阶段锁定空间、布景、光线、桌面关系和场地氛围",
+            "product_reference_urls": product_reference_urls,
+            "product_reference_role": "产品参考图，用于创意规划阶段识别产品外观、包装、质地、颜色、卖点呈现和使用场景",
+            "regeneration_feedback": regeneration_feedback,
             "version_no": min(brief_version_no, style_version_no),
         })
 
@@ -298,6 +321,12 @@ class BriefPersistenceService:
         except Exception as exc:
             logger.warning(f"读取 style ArtifactRef 失败: {exc!r}，使用兜底结构", event_type="style_artifact_read_failed")
             style_bible_data = {}
+        self._enforce_reference_profiles(
+            creative_brief_data,
+            style_bible_data,
+            scene_reference_url=scene_reference_url,
+            product_reference_urls=product_reference_urls,
+        )
 
         # ---- 步骤 3: 落库 + 激活 + 快照 + 状态推进 -------------------------
         logger.info(
@@ -350,6 +379,89 @@ class BriefPersistenceService:
         storage = get_storage()
         await storage.async_upload_file(key, path, content_type=content_type)
         return storage.get_presigned_url(key, expiry_seconds=6 * 60 * 60)
+
+    async def _resolve_product_reference_image_urls(
+        self,
+        project_id: str,
+        asset_ids: list[str],
+    ) -> list[str]:
+        if not asset_ids:
+            return []
+        async with UnitOfWork() as uow:
+            asset_repo = AssetRepository(uow.session)
+            assets = await asset_repo.list_by_ids(asset_ids[:3])
+            asset_map = {asset.id: asset for asset in assets if asset.project_id == project_id}
+            ordered_assets = [asset_map[asset_id] for asset_id in asset_ids[:3] if asset_id in asset_map]
+            urls: list[str] = []
+            for asset in ordered_assets:
+                url = await build_asset_access_url(asset)
+                if url:
+                    urls.append(url)
+                else:
+                    get_project_logger(project_id, module="services.brief").warning(
+                        f"产品参考图访问 URL 生成失败: asset_id={asset.id!r}",
+                        event_type="product_reference_url_missing",
+                    )
+            return urls
+
+    def _enforce_reference_profiles(
+        self,
+        creative_brief_data: dict[str, Any],
+        style_bible_data: dict[str, Any],
+        *,
+        scene_reference_url: str | None,
+        product_reference_urls: list[str],
+    ) -> None:
+        """LLM 可能忽略图片附件；后端用真实输入修正可继承的参考图契约。"""
+        brief = creative_brief_data.get("creative_brief")
+        if isinstance(brief, dict):
+            extension = brief.setdefault("extension", {})
+        else:
+            extension = creative_brief_data.setdefault("extension", {})
+        if not isinstance(extension, dict):
+            return
+
+        if scene_reference_url:
+            scene_profile = {
+                "role": "固定场地/场景参考图",
+                "url": scene_reference_url,
+                "observation": (
+                    "已收到固定场地参考图 data/person_pic/d1.png。后续创意、剧本、分镜和视频 prompt "
+                    "必须基于该图片的空间结构、布景、桌面关系、背景材质、光线和场地氛围展开。"
+                ),
+                "usage_rules": "不得声称未收到固定场地图；不得规划与该场地冲突的新空间。",
+            }
+            extension["scene_reference_profile"] = scene_profile
+            extension["set_design_profile"] = scene_profile
+
+        if product_reference_urls:
+            extension.setdefault(
+                "product_reference_profile",
+                {
+                    "role": "产品参考图",
+                    "urls": product_reference_urls,
+                    "observation": (
+                        "已收到产品参考图。后续创意、剧本、分镜和视频 prompt 应继承产品外观、"
+                        "包装、颜色、材质和卖点呈现。"
+                    ),
+                    "usage_rules": "不得忽略产品真实外观；不得把产品图当作人物图。",
+                },
+            )
+
+        notes_parts = []
+        if style_bible_data.get("reference_notes"):
+            notes_parts.append(str(style_bible_data["reference_notes"]))
+        if scene_reference_url:
+            notes_parts.append(
+                "固定场地图已提供：data/person_pic/d1.png，后续必须以该图的真实场地为基准，"
+                "不得再写“未收到固定场地参考图”。"
+            )
+        if product_reference_urls:
+            notes_parts.append(
+                f"产品参考图已提供 {len(product_reference_urls)} 张，后续必须继承产品真实外观、包装、材质和颜色。"
+            )
+        if notes_parts:
+            style_bible_data["reference_notes"] = " ".join(notes_parts)
 
     async def save_from_data(
         self,

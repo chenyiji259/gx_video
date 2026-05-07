@@ -200,6 +200,45 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return payload.data as T;
 }
 
+async function requestBlob(path: string, init?: RequestInit): Promise<Blob> {
+  const token = getToken();
+  const headers = new Headers(init?.headers ?? {});
+
+  if (token) {
+    headers.set('Authorization', `Bearer ${token}`);
+  }
+
+  let response = await fetch(`${API_BASE_URL}${path}`, {
+    ...init,
+    headers,
+  });
+
+  if (response.status === 401 && !isAuthRequest(path)) {
+    const newToken = await refreshAccessToken();
+    if (newToken) {
+      headers.set('Authorization', `Bearer ${newToken}`);
+      response = await fetch(`${API_BASE_URL}${path}`, {
+        ...init,
+        headers,
+      });
+    } else {
+      clearToken();
+      notifyAuthExpired();
+    }
+  }
+
+  if (!response.ok) {
+    const payload = await parseJsonResponse(response);
+    const detail = extractDetail(payload?.detail);
+    const envelopeError = payload && 'error' in payload ? payload.error : undefined;
+    const message = detail?.message || envelopeError?.message || `Request failed: ${response.status}`;
+    const code = detail?.code || envelopeError?.code;
+    throw new ApiError(message, response.status, code);
+  }
+
+  return response.blob();
+}
+
 export const isNotFoundError = (error: unknown) =>
   error instanceof ApiError && error.status === 404;
 
@@ -315,6 +354,10 @@ export const projectApi = {
 
   getLatestExport(projectId: string): Promise<ExportRecord> {
     return request(`/projects/${projectId}/exports/latest`);
+  },
+
+  downloadLatestExport(projectId: string): Promise<Blob> {
+    return requestBlob(`/projects/${projectId}/exports/latest/download`);
   },
 
   listDecisions(projectId: string): Promise<{ items: PendingDecision[]; total: number }> {

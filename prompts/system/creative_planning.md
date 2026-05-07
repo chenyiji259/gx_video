@@ -125,10 +125,13 @@ extension 会自然进入 `CreativeBriefVersion.raw_payload`，业务层通过
 - `performance_ratio`：0.0~1.0 浮点数（演示类 0.5~0.8，叙事类 0.2~0.4，氛围类 0.0~0.2）
 - `style_direction`：单段中文文字，描述视觉总体方向
 - 如果输入包含固定场地/场景参考图，`summary`、`style_direction`、`reference_notes` 或 `creative_brief.set_design_profile` 必须体现该场地的空间、布景、光线和氛围，并作为后续剧本与 storyboard 的场景基准；不得规划与该场地冲突的新空间。
+- 如果输入包含产品参考图，必须先观察图片中的产品外观、包装、材质、颜色、卖点呈现方式和适合的使用关系；这些结论必须写入 `creative_brief.extension.product_reference_profile` 与 `style_bible.reference_notes`，供后续剧本、分镜和视频 prompt 继承。产品参考图不是人物图，不得忽略真实产品外观。
+- 如果同时包含固定场地图和产品图，必须说明产品如何放置/使用在该固定场地内，后续场景不得脱离固定场地，也不得把产品改写成未在参考图中出现的形态。
 - 所有文本字段不得为 null，至少为空字符串
 
 ### style_bible
 - `palette`：必须是 JSON 对象（含 primary / secondary / description），不得是字符串
+- `reference_notes`：必须汇总固定场地图与产品图的观察结论，包括场地空间、布景、光线、产品外观、包装、材质、颜色和卖点视觉化策略。
 
 ### extension（三宫格扩展字段）
 - `target_duration_sec`：用户期望视频时长，整数秒
@@ -145,6 +148,9 @@ extension 会自然进入 `CreativeBriefVersion.raw_payload`，业务层通过
   - brief 与 style 不要引导后续镜头出现真人脸、真人身体或真人手部特写
 - 若视频无明确角色（纯概念展示），`character_list` 可为空数组 `[]`
 - `aspect_ratio`：默认 `9:16`（竖屏抖音），用户指定其他时按其值
+- `scene_reference_profile`：当输入固定场地图时必须填写，包含 role / observation / usage_rules
+- `set_design_profile`：当输入固定场地图时也必须填写，内容与 `scene_reference_profile` 保持一致，用于旧版前端展示场景设定
+- `product_reference_profile`：当输入产品图时必须填写，包含 role / observation / visual_selling_points / usage_rules
 
 ---
 
@@ -161,3 +167,4 @@ extension 会自然进入 `CreativeBriefVersion.raw_payload`，业务层通过
 4. 不需要 phase-2，shot plan 由后续 NarrativeScriptAgent 派生
 
 **绝不能**：跳过 write_artifact_tool 直接返回 JSON 文本。
+**绝不能**：把 `image_attachment`、`user_input_image` 或 image_url 当作 ArtifactRef 调用 `read_artifact_tool`。图片已经作为多模态输入提供，直接观察图片内容即可。

@@ -104,6 +104,69 @@ def test_seedance_appends_video_output_constraints_without_negative_prompt():
     assert "负向约束" not in merged
 
 
+def test_seedance_http_request_log_formats_prompt_and_redacts_auth(monkeypatch):
+    class FakeLogger:
+        def __init__(self):
+            self.records = []
+
+        def info(self, message, *, event_type=None, **extra):
+            self.records.append({
+                "message": message,
+                "event_type": event_type,
+                "extra": extra,
+            })
+
+    fake_logger = FakeLogger()
+    monkeypatch.setattr(seedance_module, "_logger", fake_logger)
+
+    adapter = SeedanceAdapter.__new__(SeedanceAdapter)
+    payload = {
+        "model": "doubao-seedance-2-0-260128",
+        "content": [
+            {
+                "type": "text",
+                "text": "第一句。第二句！第三句? 不要生成字幕、水印。",
+            },
+            {
+                "type": "image_url",
+                "image_url": {"url": "asset://asset-person-1"},
+                "role": "reference_image",
+            },
+        ],
+        "ratio": "9:16",
+        "duration": 15,
+        "resolution": "480p",
+        "generate_audio": True,
+        "watermark": False,
+    }
+
+    adapter._log_http_request_payload(
+        url="https://ark.example.com/contents/generations/tasks",
+        headers={
+            "Authorization": "Bearer real-secret-token",
+            "Content-Type": "application/json",
+        },
+        payload=payload,
+    )
+
+    logs = [
+        record
+        for record in fake_logger.records
+        if record["event_type"] == "seedance_http_request_payload"
+    ]
+    assert len(logs) == 1
+    message = logs[0]["message"]
+    assert "POST https://ark.example.com/contents/generations/tasks" in message
+    assert "real-secret-token" not in message
+    assert "Bearer ***" in message
+    assert '"image_url": {' in message
+    assert "asset://asset-person-1" in message
+    assert "prompt_formatted:" in message
+    assert "第一句。\n第二句！\n第三句?\n不要生成字幕、水印。" in message
+    assert logs[0]["extra"]["headers"]["Authorization"] == "Bearer ***"
+    assert logs[0]["extra"]["payload"] == payload
+
+
 def test_default_seedance_provider_uses_fast_model_from_config():
     adapter = get_video_provider()
 

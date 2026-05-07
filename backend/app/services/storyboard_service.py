@@ -376,7 +376,7 @@ class StoryboardService:
         ext: CreativeBriefExtension,
         logger: Any,
     ) -> StoryboardVersion:
-        """口播链路：生成 1 张 Story Overview Board，不切三宫格 cell。"""
+        """口播链路：生成 1 张导演分镜图，不切三宫格 cell。"""
         async with UnitOfWork() as uow:
             shot_plan = await ShotPlanRepository(uow.session).get_active(project_id)
             current_storyboard = await StoryboardVersionRepository(uow.session).get_active(
@@ -408,7 +408,7 @@ class StoryboardService:
         segment_count = total_shots
 
         logger.info(
-            f"口播 Story Overview Board 生成开始: segment_count={segment_count}",
+            f"口播导演分镜图生成开始: segment_count={segment_count}",
             event_type="storyboard_story_overview_start",
         )
         previous_prompt = await self._latest_storyboard_prompt(
@@ -475,7 +475,7 @@ class StoryboardService:
                         "segment_count": segment_count,
                         "story_board_aspect_ratio": "21:9",
                         "story_board_image_resolution": TALKING_HEAD_STORY_BOARD_IMAGE_RESOLUTION,
-                        "message": "口播故事大图生成中…",
+                        "message": "口播导演分镜图生成中…",
                     },
                 ),
             )
@@ -488,11 +488,11 @@ class StoryboardService:
             )
         except ImageGenerationError as exc:
             logger.warning(
-                f"口播故事大图生成失败: {exc}",
+                f"口播导演分镜图生成失败: {exc}",
                 event_type="storyboard_story_overview_failed",
             )
             raise StoryboardGenerationError(
-                f"口播故事大图生成失败: {exc.message}",
+                f"口播导演分镜图生成失败: {exc.message}",
                 code="story_overview_generation_failed",
             ) from exc
 
@@ -502,7 +502,10 @@ class StoryboardService:
             layout_reading_map = dict(bundle.params.get("layout_reading_map") or {})
             if not layout_reading_map:
                 layout_reading_map = {
-                    f"segment_{idx + 1}": f"只读取故事大图中 Segment {idx + 1} / {segment_time_range(idx)} 区域"
+                    f"segment_{idx + 1}": (
+                        f"只读取导演分镜图中第 {idx + 1} 行 / {segment_time_range(idx)} 的画面内容参考、景别、运镜方式和动作节奏，"
+                        "不要复刻表格标题、编号、分栏、注释或任何可读文字。"
+                    )
                     for idx in range(segment_count)
                 }
             segments = [
@@ -643,7 +646,7 @@ class StoryboardService:
             )
 
         logger.info(
-            f"口播 Story Overview Board 生成完成: version={version_no} asset={parent_asset_id!r}",
+            f"口播导演分镜图生成完成: version={version_no} asset={parent_asset_id!r}",
             event_type="storyboard_story_overview_done",
         )
         return storyboard_version

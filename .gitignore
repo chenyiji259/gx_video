@@ -13,6 +13,10 @@ __pycache__/
 
 logs/
 data/
+docs/*
+!docs/API_REFERENCE.md
+!docs/api/
+!docs/api/**
 
 frontend/node_modules/
 frontend/dist/
