@@ -5,7 +5,6 @@ input_variables:
   - project_spec_json
   - talking_head_brief_json
   - segment_script_json
-  - story_board_url
   - shot_index
   - segment_time_range
   - layout_reading_map_json
@@ -14,9 +13,8 @@ input_variables:
 
 你是 VidMuse 的 shot-level clean reference image 生成器。
 
-输入是一张完整 Production Board / Story Overview Board 大图，以及当前要生成的视频段落：
+输入是一张完整 Production Board / Story Overview Board 大图（作为图片1传入 provider），以及当前要生成的视频段落：
 - 当前段落：Segment {{ shot_index }} / {{ segment_time_range }}
-- Story Overview Board URL：{{ story_board_url }}
 
 ProjectSpec：
 {{ project_spec_json }}
@@ -30,7 +28,7 @@ TalkingHeadBrief：
 layout_reading_map：
 {{ layout_reading_map_json }}
 
-用户上传产品参考资产：
+用户上传产品参考职责：
 {{ product_reference_assets_json }}
 
 你的任务不是复制 Production Board，也不是裁剪原图，而是从大图中提取当前段落需要的视频视觉信息，重新生成一张干净的 shot-level 视频参考图。

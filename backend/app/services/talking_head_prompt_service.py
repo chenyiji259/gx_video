@@ -56,6 +56,19 @@ def _clean_reference_list(references: list[str]) -> list[str]:
     return [str(item).strip() for item in references if str(item or "").strip()]
 
 
+def _story_overview_board_reference_urls(
+    *,
+    host_reference_urls: list[str],
+    scene_reference_url: str | None,
+    product_refs: list[dict[str, str]],
+) -> list[str]:
+    urls: list[str] = []
+    for url in [*host_reference_urls[:3], scene_reference_url, *[ref["url"] for ref in product_refs]]:
+        if url and url not in urls:
+            urls.append(url)
+    return urls
+
+
 def _project_root() -> Path:
     return Path(__file__).resolve().parents[3]
 
@@ -105,14 +118,69 @@ def _product_reference_text(product_refs: list[dict[str, str]], *, start_index: 
     if not product_refs:
         return "（未上传产品图，产品仅按剧本和创意描述进行抽象展示）"
     lines = []
-    for offset, ref in enumerate(product_refs):
+    for offset, _ref in enumerate(product_refs):
         image_no = start_index + offset
         lines.append(
-            f"图片{image_no}是用户上传的产品图，asset_id={ref['asset_id']}，URL：{ref['url']}。"
+            f"图片{image_no}是用户上传的产品图。"
             "它是本次要讲解/展示的真实产品外观参考，只能作为产品瓶身、包装、材质、颜色和形态参考，"
             "不要当作人物、场景或 Production Board。"
         )
     return "\n".join(lines)
+
+
+def _product_reference_prompt_items(product_refs: list[dict[str, str]], *, start_index: int) -> list[dict[str, Any]]:
+    return [
+        {
+            "image_no": start_index + offset,
+            "role": "product_reference",
+            "description": "用户上传产品图，只用于锁定产品瓶身、包装、材质、颜色和形态，不是人物图、场地图或 Production Board。",
+        }
+        for offset, _ref in enumerate(product_refs)
+    ]
+
+
+def _host_reference_prompt_items(count: int) -> list[dict[str, Any]]:
+    descriptions = [
+        "唯一服装与整体造型基准，锁定上衣、内搭、颜色、领口、袖口、配饰和穿搭风格。",
+        "同一角色身份补充参考，只锁定脸部身份、年龄感、五官气质和基础身形，不引入新服装。",
+        "同一角色身份补充参考，只锁定脸部身份、年龄感、五官气质和基础身形，不引入新性别、新职业气质或新造型。",
+    ]
+    return [
+        {
+            "image_no": idx + 1,
+            "role": "person_reference",
+            "description": descriptions[idx] if idx < len(descriptions) else "同一角色人物参考，不代表新增人物。",
+        }
+        for idx in range(min(count, 3))
+    ]
+
+
+def _audio_reference_prompt_items(count: int) -> list[dict[str, Any]]:
+    return [
+        {
+            "audio_no": idx + 1,
+            "role": "voice_reference",
+            "description": "只参考音色、声线质感、年龄感、口音和说话气质，不承载对白内容。",
+        }
+        for idx in range(count)
+    ]
+
+
+def _story_overview_board_reference_text(product_count: int) -> str:
+    product_lines = "\n".join(
+        f"- 图片{5 + idx}：产品参考图，用于锁定用户上传产品的瓶身、包装、材质、颜色和形态。"
+        for idx in range(product_count)
+    )
+    if not product_lines:
+        product_lines = "- 未上传产品图：产品仅按剧本和创意描述抽象展示。"
+    return "\n".join(
+        [
+            "参考图职责说明：",
+            "- 图片1、图片2、图片3：人物参考图，只用于锁定同一位主持人的气质、身形、发型轮廓、眼镜轮廓和服装基准，不代表三位不同人物。",
+            "- 图片4：场地参考图，只用于锁定统一空间环境、桌面布局、背景材质、光线和氛围，不是人物图或产品图。",
+            product_lines,
+        ]
+    )
 
 
 def _segment_title(segment: dict[str, Any], index: int, topic: str) -> str:
@@ -165,7 +233,7 @@ def _build_story_overview_board_prompt(
     audio_assets: list[str],
     scene_asset_url: str | None = None,
     product_refs: list[dict[str, str]] | None = None,
-    product_start_index: int = 3,
+    product_start_index: int = 5,
 ) -> dict[str, Any]:
     output_config = getattr(spec, "output_config", None) or {}
     segments = list(narrative_payload.get("shots") or [])
@@ -192,13 +260,9 @@ def _build_story_overview_board_prompt(
         or (style_payload.get("visual_style", {}) if isinstance(style_payload.get("visual_style"), dict) else {}).get("environment")
         or "现代护肤科普工作室。暖灰色或浅米色背景，柔和暖白光，桌面有护肤品包装、成分卡片、简洁分子结构图和皮肤屏障示意卡。"
     )
-    if scene_asset_url:
-        scene_lock = (
-            f"{scene_lock}\n固定场景场地参考图 URL：{scene_asset_url}。"
-            "该图片是统一场景/场地参考，只用于锁定空间环境、桌面布局、背景材质、光线和氛围，不是人物或产品图。"
-        )
     product_refs = product_refs or []
     product_text = _product_reference_text(product_refs, start_index=product_start_index)
+    reference_text = _story_overview_board_reference_text(len(product_refs))
     segment_blocks: list[str] = []
     reading_map: dict[str, str] = {}
     for idx, segment in enumerate(segments):
@@ -242,7 +306,9 @@ def _build_story_overview_board_prompt(
 统一场景：
 {scene_lock}
 
-用户上传产品图：
+{reference_text}
+
+用户上传产品图职责：
 {product_text}
 生图时必须把这些图片理解为本次视频要介绍的产品，结合创意方向、SegmentScript 和台词安排产品展示、产品 close-up、桌面摆放和不可读瓶身轮廓。产品图可以不出现于每个格子，但出现时必须保持产品外观一致，不要变成随机护肤瓶或普通道具。
 
@@ -294,7 +360,6 @@ def _build_story_overview_board_prompt(
         "source_trace": {
             "host_reference_image_assets": host_assets,
             "reference_audio_assets": audio_assets,
-            "scene_reference_url": scene_asset_url,
             "product_reference_asset_ids": [ref["asset_id"] for ref in product_refs],
         },
     }
@@ -372,11 +437,14 @@ def _build_clean_reference_prompt(
     positive = f"""
 从完整 Story Overview Board 派生当前 shot 的无文字 clean visual reference。
 
-参考图来源：{story_board_url}
+参考图职责：
+图片1是完整 Story Overview Board，只用于读取当前段落的场景、构图、人物动作、产品摆放、动作节奏和光线氛围。
+图片2及之后如存在，是用户上传产品图，只用于锁定产品瓶身、包装、颜色、材质、形态和主要视觉特征，不是人物图或场地图。
+
 当前段落：Segment {index + 1} / {segment_time_range(index)}
 读取范围：{instruction}
 当前段落目标：{goal}
-用户上传产品图：
+用户上传产品图职责：
 {product_text}
 
 生成一张真实视频关键视觉参考帧，不要裁剪原图，不要复刻 Production Board 排版。
@@ -579,8 +647,6 @@ class TalkingHeadPromptService:
             fallback_references=host_reference_assets,
         )
         scene_reference_url = await self._resolve_scene_reference_image_url(project_id)
-        if scene_reference_url:
-            host_reference_urls.append(scene_reference_url)
         product_refs = await _resolve_product_reference_urls(session, project_id, spec)
         reference_audio_urls = _clean_reference_list(reference_audio_assets)
         rendered = _build_story_overview_board_prompt(
@@ -592,7 +658,7 @@ class TalkingHeadPromptService:
             audio_assets=reference_audio_assets,
             scene_asset_url=scene_reference_url,
             product_refs=product_refs,
-            product_start_index=3,
+            product_start_index=5,
         )
         if regeneration_prompt_section:
             rendered["image_positive_prompt"] = (
@@ -616,16 +682,11 @@ class TalkingHeadPromptService:
                 "regeneration_feedback": regeneration_prompt_section or None,
             }
         )
-        board_reference_urls: list[str] = []
-        if host_reference_urls:
-            board_reference_urls.append(host_reference_urls[0])
-        if scene_reference_url and scene_reference_url not in board_reference_urls:
-            board_reference_urls.append(scene_reference_url)
-        for ref in product_refs:
-            if len(board_reference_urls) >= 3:
-                break
-            if ref["url"] not in board_reference_urls:
-                board_reference_urls.append(ref["url"])
+        board_reference_urls = _story_overview_board_reference_urls(
+            host_reference_urls=host_reference_urls,
+            scene_reference_url=scene_reference_url,
+            product_refs=product_refs,
+        )
 
         bundle = PromptBundle(
             bundle_id=generate_ulid(),
@@ -689,9 +750,18 @@ class TalkingHeadPromptService:
         if not ref_dir.is_absolute():
             ref_dir = _project_root() / ref_dir
         image_paths: list[Path] = []
+        scene_path = Path(getattr(cfg, "story_board_scene_image_path", "") or "")
+        if scene_path and not scene_path.is_absolute():
+            scene_path = _project_root() / scene_path
+        scene_path = scene_path.resolve() if scene_path else None
+
         if ref_dir.exists():
             for pattern in ("*.png", "*.jpg", "*.jpeg", "*.webp"):
-                image_paths.extend(sorted(ref_dir.glob(pattern)))
+                for candidate in sorted(ref_dir.glob(pattern)):
+                    resolved_candidate = candidate.resolve()
+                    if scene_path and resolved_candidate == scene_path:
+                        continue
+                    image_paths.append(candidate)
         if not image_paths:
             return _clean_reference_list(fallback_references)
 
@@ -739,7 +809,9 @@ class TalkingHeadPromptService:
                 "shot_index": shot_index + 1,
                 "segment_time_range": segment_time_range(shot_index),
                 "layout_reading_map_json": _json_text(layout_reading_map),
-                "product_reference_assets_json": _json_text(product_refs),
+                "product_reference_assets_json": _json_text(
+                    _product_reference_prompt_items(product_refs, start_index=2)
+                ),
             },
             logger=logger,
         )
@@ -765,12 +837,14 @@ class TalkingHeadPromptService:
                 "source_segment_index": shot_index + 1,
                 "source_segment_time_range": segment_time_range(shot_index),
                 "asset_purpose": "talking_head_shot_clean_reference",
+                "target_label": f"talking_head_clean_ref_shot_{shot_index + 1:03d}",
             }
         )
+        clean_target_id = str(getattr(shot, "id", "") or "").strip() or generate_ulid()
         bundle = PromptBundle(
             bundle_id=generate_ulid(),
             target_type="storyboard_frame",
-            target_id=f"talking_head_clean_ref_shot_{shot_index + 1:03d}",
+            target_id=clean_target_id,
             provider=provider_name,
             positive_prompt=str(rendered.get("image_positive_prompt") or ""),
             negative_prompt=rendered.get("image_negative_prompt"),
@@ -841,9 +915,15 @@ class TalkingHeadPromptService:
                 "shot_index": shot_index + 1,
                 "segment_time_range": segment_time_range(shot_index),
                 "layout_reading_map_json": _json_text(layout_reading_map),
-                "host_reference_assets_json": _json_text(host_reference_assets),
-                "reference_audio_assets_json": _json_text(reference_audio_assets),
-                "product_reference_assets_json": _json_text(product_refs),
+                "host_reference_assets_json": _json_text(
+                    _host_reference_prompt_items(len(host_reference_assets))
+                ),
+                "reference_audio_assets_json": _json_text(
+                    _audio_reference_prompt_items(len(reference_audio_assets))
+                ),
+                "product_reference_assets_json": _json_text(
+                    _product_reference_prompt_items(product_refs, start_index=5)
+                ),
             },
             logger=logger,
         )

@@ -169,16 +169,25 @@ class GPTImageAdapter:
         negative_prompt: Optional[str] = None,
         params: Optional[dict[str, Any]] = None,
     ) -> ImageResult:
-        """多参考图（GPT Image 2 文档建议最多 3 张）。"""
-        if len(image_urls) > 3:
+        """多参考图，数量上限由 provider 能力配置控制。"""
+        max_refs = 3
+        if self._profile is not None:
+            try:
+                max_refs = int(self._profile.capabilities.get("max_reference_images", 3))
+            except (TypeError, ValueError):
+                max_refs = 3
+        if max_refs < 1:
+            max_refs = 1
+        reference_images = list(image_urls[:max_refs])
+        if len(image_urls) > max_refs:
             _logger.warning(
-                f"GPT Image 2 截断参考图数量 {len(image_urls)} → 3",
+                f"GPT Image 2 截断参考图数量 {len(image_urls)} → {max_refs}",
                 event_type="gpt_image_truncate_refs",
             )
         return await self._submit_and_poll(
             prompt=prompt,
             params=params or {},
-            reference_images=list(image_urls[:3]),
+            reference_images=reference_images,
         )
 
     # ------------------------------------------------------------------

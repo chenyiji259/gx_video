@@ -6,7 +6,6 @@ variables:
   - project_spec_json
   - talking_head_brief_json
   - segment_script_json
-  - story_board_url
   - shot_index
   - segment_time_range
   - layout_reading_map_json
@@ -28,9 +27,6 @@ TalkingHeadBrief：
 当前 SegmentScript：
 {{ segment_script_json }}
 
-故事大图 URL：
-{{ story_board_url }}
-
 当前 shot：{{ shot_index }}
 当前时间段：{{ segment_time_range }}
 
@@ -43,7 +39,7 @@ TalkingHeadBrief：
 固定声色参考资产：
 {{ reference_audio_assets_json }}
 
-用户上传产品参考资产：
+用户上传产品参考职责：
 {{ product_reference_assets_json }}
 
 必须遵守的资产职责：

@@ -1,10 +1,17 @@
 from types import SimpleNamespace
 
 from app.services.talking_head_prompt_service import (
+    _build_story_overview_board_prompt,
     _build_clean_reference_prompt,
     _enforce_video_prompt_contract,
     _fallback_video_prompt,
+    _audio_reference_prompt_items,
+    _host_reference_prompt_items,
+    _product_reference_prompt_items,
+    _product_reference_text,
+    _story_overview_board_reference_urls,
 )
+from app.utils.ids import generate_ulid
 
 
 def test_fallback_talking_head_video_prompt_locks_host_identity_and_clothing():
@@ -40,6 +47,7 @@ def test_fallback_talking_head_video_prompt_locks_host_identity_and_clothing():
     assert rendered["reference_image_urls"][3] == "https://example.com/clean-shot-2.png"
     assert "https://example.com/board.png" not in rendered["reference_image_urls"]
     assert rendered["params"]["watermark"] is False
+    assert "https://example.com/clean-shot-2.png" not in positive
     assert "换装" in negative
     assert "改性别" in negative
     assert "照抄故事大图乱码文字" in negative
@@ -88,10 +96,115 @@ def test_clean_reference_prompt_removes_production_board_text_elements():
     assert "无编号" in positive
     assert "无任何可读中文/英文/数字" in positive
     assert "用户上传产品图" in positive
-    assert "https://example.com/product.png" in positive
+    assert "https://example.com/product.png" not in positive
     assert "产品瓶身、包装、颜色、材质、形态" in positive
     assert "不相干产品" in positive
     assert "Production Board" in negative
     assert "可读产品文字" in negative
     assert "与用户上传产品图不一致的产品" in negative
     assert rendered["params"]["size"] == "1920x1080"
+
+
+def test_story_overview_board_reference_urls_include_hosts_scene_and_products():
+    urls = _story_overview_board_reference_urls(
+        host_reference_urls=[
+            "https://example.com/person-1.png",
+            "https://example.com/person-2.png",
+            "https://example.com/person-3.png",
+            "https://example.com/person-extra.png",
+        ],
+        scene_reference_url="https://example.com/scene.png",
+        product_refs=[
+            {"asset_id": "prod_1", "url": "https://example.com/product-1.png"},
+            {"asset_id": "prod_2", "url": "https://example.com/product-2.png"},
+            {"asset_id": "prod_3", "url": "https://example.com/product-3.png"},
+        ],
+    )
+
+    assert urls == [
+        "https://example.com/person-1.png",
+        "https://example.com/person-2.png",
+        "https://example.com/person-3.png",
+        "https://example.com/scene.png",
+        "https://example.com/product-1.png",
+        "https://example.com/product-2.png",
+        "https://example.com/product-3.png",
+    ]
+
+
+def test_story_overview_board_prompt_numbers_products_as_5_6_7_without_urls():
+    rendered = _build_story_overview_board_prompt(
+        spec=SimpleNamespace(
+            user_prompt="光希视黄醇精华",
+            output_config={"target_duration_sec": 15, "target_audience": "中老年用户"},
+        ),
+        brief_payload={"title": "光希视黄醇精华"},
+        style_payload={},
+        narrative_payload={"shots": [{"dialogue": "大家好。今天讲抗皱。"}]},
+        host_assets=[
+            "https://example.com/person-1.png",
+            "https://example.com/person-2.png",
+            "https://example.com/person-3.png",
+        ],
+        audio_assets=[],
+        scene_asset_url="https://example.com/scene.png",
+        product_refs=[
+            {"asset_id": "prod_1", "url": "https://example.com/product-1.png"},
+            {"asset_id": "prod_2", "url": "https://example.com/product-2.png"},
+            {"asset_id": "prod_3", "url": "https://example.com/product-3.png"},
+        ],
+    )
+
+    positive = rendered["image_positive_prompt"]
+
+    assert "图片5是用户上传的产品图" in positive
+    assert "图片6是用户上传的产品图" in positive
+    assert "图片7是用户上传的产品图" in positive
+    assert "图片3是用户上传的产品图" not in positive
+    assert "图片4是用户上传的产品图" not in positive
+    assert "https://example.com" not in positive
+
+
+def test_product_reference_prompt_text_uses_image_numbers_without_urls():
+    refs = [
+        {"asset_id": "prod_1", "url": "https://example.com/product-1.png"},
+        {"asset_id": "prod_2", "url": "https://example.com/product-2.png"},
+    ]
+
+    text = _product_reference_text(refs, start_index=5)
+    items = _product_reference_prompt_items(refs, start_index=5)
+
+    assert "图片5是用户上传的产品图" in text
+    assert "图片6是用户上传的产品图" in text
+    assert "https://example.com" not in text
+    assert items == [
+        {
+            "image_no": 5,
+            "role": "product_reference",
+            "description": "用户上传产品图，只用于锁定产品瓶身、包装、材质、颜色和形态，不是人物图、场地图或 Production Board。",
+        },
+        {
+            "image_no": 6,
+            "role": "product_reference",
+            "description": "用户上传产品图，只用于锁定产品瓶身、包装、材质、颜色和形态，不是人物图、场地图或 Production Board。",
+        },
+    ]
+
+
+def test_reference_prompt_items_describe_roles_without_asset_strings():
+    host_items = _host_reference_prompt_items(3)
+    audio_items = _audio_reference_prompt_items(2)
+
+    assert [item["image_no"] for item in host_items] == [1, 2, 3]
+    assert all(item["role"] == "person_reference" for item in host_items)
+    assert "asset://" not in str(host_items)
+    assert [item["audio_no"] for item in audio_items] == [1, 2]
+    assert all(item["role"] == "voice_reference" for item in audio_items)
+
+
+def test_clean_reference_target_id_must_fit_prompt_bundle_column():
+    shot_id = generate_ulid()
+    old_label = "talking_head_clean_ref_shot_002"
+
+    assert len(shot_id) == 26
+    assert len(old_label) > 26

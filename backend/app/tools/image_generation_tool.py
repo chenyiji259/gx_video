@@ -98,7 +98,7 @@ class ImageGenerationTool:
         )
         try:
             if ref_urls:
-                # 多参考图模式：场景图 + 造型图 + 角色基础图（最多 3 张）
+                # 多参考图模式：调用层传完整业务参考图，具体上限由 provider 能力决定。
                 if hasattr(adapter, "generate_multi_ref_img2img"):
                     result = await adapter.generate_multi_ref_img2img(
                         prompt=bundle.positive_prompt,

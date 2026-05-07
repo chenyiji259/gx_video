@@ -58,8 +58,9 @@ class PromptBundle(BaseModel):
     # doc11 批次3：image-to-image 参考图字段
     # reference_image_url: 主参考图 URL（向后兼容，单图 img2img 时使用）
     reference_image_url: str | None = None
-    # reference_image_urls: 多参考图 URL 列表（qwen-image-2.0-pro 支持 1-3 张）
-    # 顺序：[场景参考图, 造型参考图, 角色基础图]，按需取 1-3 张
+    # reference_image_urls: 多参考图 URL 列表，数量上限由 provider 能力决定。
+    # 普通三宫格常见顺序：[场景参考图, 造型参考图, 角色基础图]。
+    # 口播故事大图顺序：[人物图1-3, 场地图, 产品图1-3]。
     # 有值时 ImageGenerationTool 优先使用此字段（多参考图模式），
     # 否则回落到 reference_image_url（单图模式）。
     reference_image_urls: list[str] = Field(default_factory=list)

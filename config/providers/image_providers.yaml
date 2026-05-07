@@ -35,7 +35,7 @@ image_providers:
       supports_negative_prompt: false
       supports_reference_image: true
       supports_multi_ref: true
-      max_reference_images: 3
+      max_reference_images: 7
     default_params:
       size: "16:9"
       resolution: "2K"
