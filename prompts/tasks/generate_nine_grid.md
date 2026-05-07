@@ -46,6 +46,7 @@ variables:
 - 大图尺寸：{{ grid_width }}×{{ grid_height }}（{{ grid_resolution }} / {{ grid_orientation }}）
 - 单 cell 内的内容画幅：{{ aspect_ratio }}（如 9:16 时 cell 内的主体应按竖屏构图）
 - 全局风格锚点：{{ style_direction }}
+- 若全局风格锚点中包含“产品参考图职责”，必须把对应图片视为用户上传的产品图，用于产品外观、包装、桌面摆放、产品 close-up 或产品旋转展示；不要把产品图当作人物、场景或普通装饰图。
 - 真人入镜门禁：{{ human_on_camera_text }}
 
 ---

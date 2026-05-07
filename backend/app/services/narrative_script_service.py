@@ -38,6 +38,7 @@ from app.repositories.project_spec_repository import ProjectSpecRepository
 from app.repositories.unit_of_work import UnitOfWork
 from app.repositories.visual_bible_repository import NarrativeScriptVersionRepository
 from app.services.state_transition_service import state_transition_service
+from app.services.regeneration_context_service import regeneration_context_service
 from app.storage.local_artifact_store import LocalArtifactStore
 from app.storage.path_planner import ArtifactStage
 from app.utils.ids import generate_ulid
@@ -314,6 +315,14 @@ class NarrativeScriptService:
             )
             shot_count_total = int(extension.get("total_shots_generated") or triptych_plan["total_shots_generated"])
             grid_count = int(extension.get("grid_count") or triptych_plan["grid_count"])
+            current_narrative_payload = None
+            current_narrative_version_id = None
+            active_narrative = await NarrativeScriptVersionRepository(session).get_active(
+                project_id
+            )
+            if active_narrative is not None:
+                current_narrative_version_id = active_narrative.id
+                current_narrative_payload = active_narrative.raw_payload or {}
 
         # ---- 步骤 2: 构建 task_spec 并调用 Agent.run() --------------------------------
         logger.info("叙事剧本生成开始", event_type="narrative_generation_start")
@@ -321,6 +330,17 @@ class NarrativeScriptService:
         # P1 修复：version_no 只查询一次，同时传给 Agent 和 _persist()，
         # 保证 ArtifactRef 中的 version_no 与落库版本号严格一致。
         next_version_no = await self._get_next_version_no(project_id)
+        feedback = await regeneration_context_service.get_latest_feedback(
+            project_id,
+            decision_type="confirm_narrative",
+            target_entity_id=current_narrative_version_id,
+        )
+        regeneration_prompt_section = (
+            regeneration_context_service.build_narrative_prompt_section(
+                feedback=feedback,
+                current_narrative_payload=current_narrative_payload,
+            )
+        )
         task_spec = {
             "project_id": project_id,
             "user_prompt": user_prompt,
@@ -333,6 +353,8 @@ class NarrativeScriptService:
             "shot_count_total": shot_count_total,
             "grid_count": grid_count,
             "storyboard_layout": extension.get("storyboard_layout"),
+            "regeneration_feedback": feedback,
+            "regeneration_prompt_section": regeneration_prompt_section,
             "version_no": next_version_no,
         }
         artifact_ref = await self._agent.run(task_spec)

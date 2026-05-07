@@ -4,9 +4,10 @@ import { authApi, setToken } from '../api';
 
 interface LoginProps {
   onNavigate: (view: ViewState) => void;
+  notice?: string | null;
 }
 
-export default function Login({ onNavigate }: LoginProps) {
+export default function Login({ onNavigate, notice }: LoginProps) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -18,7 +19,7 @@ export default function Login({ onNavigate }: LoginProps) {
     setError(null);
     try {
       const result = await authApi.login(username, password);
-      setToken(result.access_token);
+      setToken(result.access_token, result.refresh_token);
       onNavigate('projects');
     } catch (err) {
       setError(err instanceof Error ? err.message : '登录失败');
@@ -85,6 +86,12 @@ export default function Login({ onNavigate }: LoginProps) {
             </label>
             <a href="#" className="text-violet-600 hover:text-violet-700 font-medium">忘记密码？</a>
           </div>
+
+          {notice && !error ? (
+            <div className="rounded-xl border border-amber-100 bg-amber-50 px-4 py-3 text-sm text-amber-700">
+              {notice}
+            </div>
+          ) : null}
 
           {error ? (
             <div className="rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-600">

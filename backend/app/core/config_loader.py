@@ -141,6 +141,7 @@ class TalkingHeadConfig(BaseModel):
     """口播类 Production Board 链路配置。"""
     host_reference_image_assets: list[str] = []
     story_board_reference_image_dir: str = "data/person_pic"
+    story_board_scene_image_path: str = ""
     reference_audio_assets: list[str] = []
     story_board_aspect_ratio: str = "21:9"
     segment_duration_sec: int = 15
@@ -290,6 +291,7 @@ def load_talking_head_config() -> TalkingHeadConfig:
     return TalkingHeadConfig(
         host_reference_image_assets=list(th_data.get("host_reference_image_assets") or []),
         story_board_reference_image_dir=str(th_data.get("story_board_reference_image_dir") or "data/person_pic"),
+        story_board_scene_image_path=str(th_data.get("story_board_scene_image_path") or ""),
         reference_audio_assets=list(th_data.get("reference_audio_assets") or []),
         story_board_aspect_ratio=str(th_data.get("story_board_aspect_ratio") or "21:9"),
         segment_duration_sec=int(th_data.get("segment_duration_sec") or 15),

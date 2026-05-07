@@ -184,6 +184,8 @@ class CreativePlanningAgent:
         image_size = task_spec.get("image_size") or ""
         generation_profile = task_spec.get("generation_profile") or ""
         storyboard_layout = task_spec.get("storyboard_layout") or triptych_plan.get("storyboard_layout")
+        scene_reference_url = str(task_spec.get("scene_reference_url") or "").strip()
+        scene_reference_role = str(task_spec.get("scene_reference_role") or "").strip()
         is_talking_head = (
             generation_profile == TALKING_HEAD_PROFILE
             or storyboard_layout == TALKING_HEAD_LAYOUT
@@ -218,8 +220,17 @@ class CreativePlanningAgent:
             f"生成规格：video_resolution={video_resolution}，image_resolution={image_resolution}，image_size={image_size or '按画幅默认'}\n"
             f"真人入镜要求：{human_on_camera_text}\n\n"
             + (
+                "固定场地参考图：本次输入附带 1 张 image_url 图片附件。"
+                f"{scene_reference_role or '它是固定场地/场景参考图'}，"
+                "请先观察该图片的空间结构、场地属性、布景、桌面关系、背景材质、光线和氛围，"
+                "再展开 creative_brief、style_bible、set_design_profile、reference_notes 和后续场景策略。"
+                "不要把这张图当作人物图或产品图；不要发散到与该场地冲突的新空间。\n\n"
+                if scene_reference_url
+                else ""
+            )
+            + (
                 "口播角色硬约束：creative_brief.extension.character_list 必须只包含 1 个主角，"
-                "character_id='host_001'，name='50岁男性护肤专家'，appearance='50岁男性护肤专家'。"
+                "character_id='host_001'，name='光希老王'，appearance='光希老王'。"
                 "后续 brief、narrative、shot plan、storyboard 和视频 prompt 不得改写为女性、多人或其他职业身份。\n\n"
                 if is_talking_head
                 else ""
@@ -247,8 +258,18 @@ class CreativePlanningAgent:
             )
             tools = [t for t in [read_artifact_tool, write_artifact_tool] if t is not None]
             agent = create_react_agent(model=llm, tools=tools)
+            human_message: HumanMessage
+            if scene_reference_url:
+                human_message = HumanMessage(
+                    content=[
+                        {"type": "text", "text": task_msg},
+                        {"type": "image_url", "image_url": {"url": scene_reference_url}},
+                    ]
+                )
+            else:
+                human_message = HumanMessage(content=task_msg)
             result = await agent.ainvoke(
-                {"messages": [SystemMessage(content=system_content), HumanMessage(content=task_msg)]},
+                {"messages": [SystemMessage(content=system_content), human_message]},
                 config={"recursion_limit": 15},
             )
         except Exception as exc:
@@ -427,8 +448,8 @@ class CreativePlanningAgent:
             output_extension["character_list"] = [
                 {
                     "character_id": "host_001",
-                    "name": "50岁男性护肤专家",
-                    "appearance": "50岁男性护肤专家",
+                    "name": "光希老王",
+                    "appearance": "光希老王",
                     "personality": "专业、亲和、可信",
                 }
             ]

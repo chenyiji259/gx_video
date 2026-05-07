@@ -62,6 +62,7 @@ from app.services.conversation_service import ConversationService
 from app.services.decision_service import DecisionService
 from app.services.event_log_service import event_log_service
 from app.services.state_transition_service import state_transition_service
+from app.services.regeneration_context_service import regeneration_context_service
 from app.schemas.event import ProjectEvent
 
 from app.core.logging import get_logger
@@ -669,6 +670,10 @@ async def trigger_generate_storyboard(
     返回 job_id，前端通过 SSE 或轮询获取完成结果。
     """
     req_id = get_request_id(request)
+    storyboard_regen_feedback = await regeneration_context_service.get_latest_feedback(
+        project_id,
+        decision_type="confirm_storyboard",
+    )
 
     # 新流程：confirm_narrative 后直接进入三宫格分镜。
     # shot_plan 只是后端从 narrative 派生的内部数据，不再要求用户额外确认。
@@ -714,7 +719,13 @@ async def trigger_generate_storyboard(
                 uow.session,
                 project_id=project_id,
                 tool_name="generate_storyboard",
-                input_payload={"project_id": project_id, "user_id": str(current_user.id)},
+                input_payload={
+                    "project_id": project_id,
+                    "user_id": str(current_user.id),
+                    "regeneration_feedback_event_id": (
+                        storyboard_regen_feedback or {}
+                    ).get("event_id"),
+                },
             )
         if is_new:
             await task_dispatcher.push_to_queue(job.id)

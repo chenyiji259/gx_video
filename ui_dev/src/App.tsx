@@ -4,7 +4,7 @@ import ProjectBoard from './components/ProjectBoard';
 import Login from './components/Login';
 import { ViewState } from './types';
 import { useEffect, useState } from 'react';
-import { authApi, clearToken } from './api';
+import { AUTH_EXPIRED_EVENT, authApi, clearToken } from './api';
 
 const AUTH_TOKEN_KEY = 'guangxi_token';
 const LEGACY_AUTH_TOKEN_KEY = 'vidmuse_token';
@@ -27,6 +27,16 @@ export default function App() {
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(
     () => localStorage.getItem(LAST_PROJECT_ID_KEY)
   );
+  const [loginNotice, setLoginNotice] = useState<string | null>(null);
+
+  const resetToLogin = (notice?: string) => {
+    clearToken();
+    localStorage.removeItem(LAST_VIEW_KEY);
+    localStorage.removeItem(LAST_PROJECT_ID_KEY);
+    setSelectedProjectId(null);
+    setLoginNotice(notice ?? null);
+    setCurrentView('login');
+  };
 
   useEffect(() => {
     const bootstrap = async () => {
@@ -42,18 +52,28 @@ export default function App() {
         setSelectedProjectId(lastProjectId);
         setCurrentView(lastView === 'workspace' && lastProjectId ? 'workspace' : 'projects');
       } catch {
-        clearToken();
-        localStorage.removeItem(LAST_VIEW_KEY);
-        localStorage.removeItem(LAST_PROJECT_ID_KEY);
-        setSelectedProjectId(null);
-        setCurrentView('login');
+        resetToLogin('登录状态已过期，请重新登录。');
       }
     };
 
     void bootstrap();
   }, []);
 
+  useEffect(() => {
+    const handleAuthExpired = () => {
+      resetToLogin('登录状态已过期，请重新登录。');
+    };
+
+    window.addEventListener(AUTH_EXPIRED_EVENT, handleAuthExpired);
+    return () => {
+      window.removeEventListener(AUTH_EXPIRED_EVENT, handleAuthExpired);
+    };
+  }, []);
+
   const navigate = (view: ViewState) => {
+    if (view !== 'login') {
+      setLoginNotice(null);
+    }
     setCurrentView(view);
     localStorage.setItem(LAST_VIEW_KEY, view);
 
@@ -72,7 +92,7 @@ export default function App() {
 
   return (
     <>
-      {currentView === 'login' && <Login onNavigate={navigate} />}
+      {currentView === 'login' && <Login onNavigate={navigate} notice={loginNotice} />}
       {currentView === 'projects' && (
         <ProjectBoard
           onNavigate={navigate}

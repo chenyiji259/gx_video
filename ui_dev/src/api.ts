@@ -12,11 +12,15 @@ import type {
   Timeline,
   TimelineSegment,
   User,
+  AssetRecord,
 } from './types';
 
 const API_BASE_URL = '/api/v1';
 const AUTH_TOKEN_KEY = 'guangxi_token';
+const REFRESH_TOKEN_KEY = 'guangxi_refresh_token';
 const LEGACY_AUTH_TOKEN_KEY = 'vidmuse_token';
+export const AUTH_EXPIRED_EVENT = 'guangxi_auth_expired';
+export const AUTH_TOKEN_REFRESHED_EVENT = 'guangxi_auth_token_refreshed';
 
 type ApiEnvelope<T> = {
   success: boolean;
@@ -56,6 +60,8 @@ const getToken = () => {
   return legacyToken;
 };
 
+const getRefreshToken = () => localStorage.getItem(REFRESH_TOKEN_KEY);
+
 const parseJsonResponse = async (response: Response): Promise<ApiErrorPayload | undefined> => {
   const rawBody = await response.text();
   if (!rawBody.trim()) {
@@ -88,31 +94,92 @@ export const getProjectEventsStreamUrl = (projectId: string) => {
   return `${API_BASE_URL}/projects/${encodeURIComponent(projectId)}/events/stream${query}`;
 };
 
-export const setToken = (token: string) => {
+export const setToken = (token: string, refreshToken?: string) => {
   localStorage.setItem(AUTH_TOKEN_KEY, token);
+  if (refreshToken) {
+    localStorage.setItem(REFRESH_TOKEN_KEY, refreshToken);
+  }
   localStorage.removeItem(LEGACY_AUTH_TOKEN_KEY);
 };
 
 export const clearToken = () => {
   localStorage.removeItem(AUTH_TOKEN_KEY);
+  localStorage.removeItem(REFRESH_TOKEN_KEY);
   localStorage.removeItem(LEGACY_AUTH_TOKEN_KEY);
+};
+
+const notifyAuthExpired = () => {
+  window.dispatchEvent(new CustomEvent(AUTH_EXPIRED_EVENT));
+};
+
+const notifyTokenRefreshed = () => {
+  window.dispatchEvent(new CustomEvent(AUTH_TOKEN_REFRESHED_EVENT));
+};
+
+const isAuthRequest = (path: string) => path === '/auth/login' || path === '/auth/refresh';
+
+let refreshPromise: Promise<string | null> | null = null;
+
+const refreshAccessToken = async (): Promise<string | null> => {
+  const refreshToken = getRefreshToken();
+  if (!refreshToken) return null;
+
+  if (!refreshPromise) {
+    refreshPromise = (async () => {
+      const response = await fetch(`${API_BASE_URL}/auth/refresh`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh_token: refreshToken }),
+      });
+      const payload = await parseJsonResponse(response);
+
+      if (!response.ok || !payload || !('success' in payload) || !payload.success) {
+        return null;
+      }
+
+      const data = payload.data as { access_token?: string };
+      if (!data.access_token) return null;
+
+      setToken(data.access_token);
+      notifyTokenRefreshed();
+      return data.access_token;
+    })().finally(() => {
+      refreshPromise = null;
+    });
+  }
+
+  return refreshPromise;
 };
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const token = getToken();
   const headers = new Headers(init?.headers ?? {});
 
-  if (!headers.has('Content-Type') && init?.body) {
+  if (!headers.has('Content-Type') && init?.body && !(init.body instanceof FormData)) {
     headers.set('Content-Type', 'application/json');
   }
   if (token) {
     headers.set('Authorization', `Bearer ${token}`);
   }
 
-  const response = await fetch(`${API_BASE_URL}${path}`, {
+  let response = await fetch(`${API_BASE_URL}${path}`, {
     ...init,
     headers,
   });
+
+  if (response.status === 401 && !isAuthRequest(path)) {
+    const newToken = await refreshAccessToken();
+    if (newToken) {
+      headers.set('Authorization', `Bearer ${newToken}`);
+      response = await fetch(`${API_BASE_URL}${path}`, {
+        ...init,
+        headers,
+      });
+    } else {
+      clearToken();
+      notifyAuthExpired();
+    }
+  }
 
   const payload = await parseJsonResponse(response);
 
@@ -198,6 +265,7 @@ export const projectApi = {
       story_board_aspect_ratio?: string;
       style_preset_locked?: boolean;
       subtitles_enabled?: boolean;
+      product_reference_asset_ids?: string[];
     }
   ): Promise<{ id: string }> {
     return request(`/projects/${projectId}/spec/versions`, {
@@ -256,11 +324,15 @@ export const projectApi = {
   selectDecision(
     projectId: string,
     decisionId: string,
-    selectedOptionId: string
+    selectedOptionId: string,
+    feedbackText?: string
   ): Promise<PendingDecision> {
     return request(`/projects/${projectId}/decisions/${decisionId}/select`, {
       method: 'POST',
-      body: JSON.stringify({ selected_option_id: selectedOptionId }),
+      body: JSON.stringify({
+        selected_option_id: selectedOptionId,
+        feedback_text: feedbackText,
+      }),
     });
   },
 
@@ -271,6 +343,69 @@ export const projectApi = {
         'X-Idempotency-Key': `${projectId}-${shotId}-${Date.now()}`,
       },
     });
+  },
+};
+
+export const assetApi = {
+  initUpload(
+    projectId: string,
+    payload: { filename: string; content_type: string; asset_type?: string }
+  ): Promise<{
+    asset_id: string;
+    upload_url: string;
+    object_key: string;
+    bucket_name: string;
+    expires_in: number;
+  }> {
+    return request(`/projects/${projectId}/assets/upload-init`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  completeUpload(
+    projectId: string,
+    payload: {
+      asset_id: string;
+      object_key: string;
+      bucket_name: string;
+      filename: string;
+      content_type: string;
+      asset_type: string;
+      width?: number;
+      height?: number;
+    }
+  ): Promise<AssetRecord> {
+    return request(`/projects/${projectId}/assets/complete`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  uploadFile(
+    projectId: string,
+    payload: { file: File; asset_type?: string; width?: number; height?: number }
+  ): Promise<AssetRecord> {
+    const formData = new FormData();
+    formData.set('file', payload.file);
+    if (payload.asset_type) formData.set('asset_type', payload.asset_type);
+    if (payload.width) formData.set('width', String(payload.width));
+    if (payload.height) formData.set('height', String(payload.height));
+    return request(`/projects/${projectId}/assets/upload-file`, {
+      method: 'POST',
+      body: formData,
+    });
+  },
+
+  listAssets(
+    projectId: string,
+    params: { asset_type?: string; limit?: number } = {}
+  ): Promise<{ items: AssetRecord[]; count: number }> {
+    const query = new URLSearchParams();
+    if (params.asset_type) query.set('asset_type', params.asset_type);
+    if (params.limit) query.set('limit', String(params.limit));
+    const suffix = query.toString() ? `?${query.toString()}` : '';
+    return request(`/projects/${projectId}/assets${suffix}`);
   },
 };
 

@@ -57,7 +57,24 @@ export interface ProjectSpec {
     story_board_aspect_ratio?: string;
     style_preset_locked?: boolean;
     subtitles_enabled?: boolean;
+    product_reference_asset_ids?: string[];
   } | null;
+}
+
+export interface AssetRecord {
+  id: string;
+  project_id: string;
+  asset_type: string;
+  bucket_name?: string;
+  object_key?: string;
+  storage_uri: string;
+  mime_type?: string;
+  size_bytes?: number;
+  duration_ms?: number | null;
+  width?: number | null;
+  height?: number | null;
+  metadata?: Record<string, unknown> | null;
+  created_at?: string | null;
 }
 
 export interface CreativeBrief {

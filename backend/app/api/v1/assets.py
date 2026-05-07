@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query, Request, status
+from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
@@ -132,6 +132,51 @@ async def complete_upload(
             duration_ms=body.duration_ms,
             width=body.width,
             height=body.height,
+        )
+    except AssetError as e:
+        http_status = (
+            status.HTTP_404_NOT_FOUND
+            if e.code == "not_found"
+            else status.HTTP_422_UNPROCESSABLE_ENTITY
+        )
+        return JSONResponse(
+            status_code=http_status,
+            content={"success": False, "error": {"code": e.code, "message": e.message}, "request_id": req_id},
+        )
+    return JSONResponse(
+        status_code=status.HTTP_201_CREATED,
+        content=ok(data=asset, request_id=req_id),
+    )
+
+
+@router.post("/upload-file", status_code=status.HTTP_201_CREATED)
+async def upload_file_proxy(
+    project_id: str,
+    request: Request,
+    file: UploadFile = File(...),
+    asset_type: Optional[str] = Form(default=None),
+    width: Optional[int] = Form(default=None),
+    height: Optional[int] = Form(default=None),
+    current_user: User = Depends(get_current_user),
+) -> JSONResponse:
+    """后端代理上传文件，返回带签名 URL 的 Asset。
+
+    用于浏览器直传 OSS 被 CORS/预检拦截的轻量图片上传场景。
+    """
+    req_id = get_request_id(request)
+    try:
+        data = await file.read()
+        if not data:
+            raise AssetError("上传文件不能为空", code="validation_error")
+        asset = await AssetService().upload_file_proxy(
+            project_id=project_id,
+            user_id=current_user.id,
+            filename=file.filename or "file",
+            content_type=file.content_type or "application/octet-stream",
+            data=data,
+            asset_type=asset_type,
+            width=width,
+            height=height,
         )
     except AssetError as e:
         http_status = (

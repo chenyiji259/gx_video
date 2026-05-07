@@ -124,6 +124,7 @@ extension 会自然进入 `CreativeBriefVersion.raw_payload`，业务层通过
   - `mixed`：兼具叙事 + 演示等多种特征
 - `performance_ratio`：0.0~1.0 浮点数（演示类 0.5~0.8，叙事类 0.2~0.4，氛围类 0.0~0.2）
 - `style_direction`：单段中文文字，描述视觉总体方向
+- 如果输入包含固定场地/场景参考图，`summary`、`style_direction`、`reference_notes` 或 `creative_brief.set_design_profile` 必须体现该场地的空间、布景、光线和氛围，并作为后续剧本与 storyboard 的场景基准；不得规划与该场地冲突的新空间。
 - 所有文本字段不得为 null，至少为空字符串
 
 ### style_bible

@@ -21,7 +21,11 @@ from app.services.duration_recommendation_service import (
     DurationRecommendationError,
     DurationRecommendationService,
 )
-from app.services.project_spec_service import ProjectSpecError, ProjectSpecService
+from app.services.project_spec_service import (
+    ProjectSpecError,
+    ProjectSpecService,
+    normalize_product_reference_asset_ids,
+)
 from app.services.output_spec_service import normalize_output_config
 
 router = APIRouter(
@@ -68,6 +72,10 @@ class CreateSpecVersionRequest(BaseModel):
             "用户上传的角色参考图 asset_id 列表，顺序即上传顺序（最多 5 张）。"
             "有内容时 input_mode 自动切换为 audio_image_text。"
         ),
+    )
+    product_reference_asset_ids: Optional[list] = Field(
+        None,
+        description="用户上传的产品图 asset_id 列表，顺序即上传顺序，最多 3 张。",
     )
     constraints: Optional[dict] = Field(
         None, description="附加约束（可选）"
@@ -188,6 +196,14 @@ async def create_spec_version(
             _output_config["story_board_aspect_ratio"] = body.story_board_aspect_ratio
         if body.subtitles_enabled is not None:
             _output_config["subtitles_enabled"] = body.subtitles_enabled
+        if body.product_reference_asset_ids is not None:
+            _output_config["product_reference_asset_ids"] = normalize_product_reference_asset_ids(
+                body.product_reference_asset_ids
+            )
+        elif "product_reference_asset_ids" in _output_config:
+            _output_config["product_reference_asset_ids"] = normalize_product_reference_asset_ids(
+                _output_config.get("product_reference_asset_ids")
+            )
         _output_config = normalize_output_config(_output_config)
         # 新流程 input_mode：有文本需求但无音频时自动切换为 text_only
         _input_mode = body.input_mode

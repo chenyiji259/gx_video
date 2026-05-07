@@ -313,6 +313,9 @@ class NarrativeScriptAgent:
         grid_count: int = int(task_spec.get("grid_count") or shot_count_total)
         storyboard_layout = str(task_spec.get("storyboard_layout") or "")
         is_talking_head = storyboard_layout == "talking_head_story_overview_board"
+        regeneration_prompt_section = str(
+            task_spec.get("regeneration_prompt_section") or ""
+        ).strip()
 
         # 参考图提示词：告知 Agent 用户上传了几张图，影响角色生成逻辑
         if reference_image_count > 0:
@@ -327,9 +330,9 @@ class NarrativeScriptAgent:
             ref_hint = "用户未上传角色参考图，角色将在视觉圣经阶段完全重新生成。"
         if is_talking_head:
             ref_hint = (
-                "【口播角色硬约束】本项目只有 1 位固定主角：50岁男性护肤专家。"
+                "【口播角色硬约束】本项目只有 1 位固定主角：光希老王。"
                 "characters 必须继承 brief.extension.character_list 中的 host_001，不得新增女性角色、多人角色或其他职业身份。"
-                "角色资产仅用于锁定同一位 50岁男性护肤专家。"
+                "角色资产仅用于锁定同一位光希老王。"
             )
 
         task_msg = (
@@ -354,7 +357,7 @@ class NarrativeScriptAgent:
             f"每个 shot 的 duration_sec {'必须等于 15 秒' if is_talking_head else '必须从允许档位中选择，且不得超过 15 秒'}，全部 shot 的时长总和要等于或尽量贴近 target_duration_sec；"
             f"characters 必须来自 brief.extension.character_list，不能丢失已有角色；"
             + (
-                "口播项目中 characters 只能保留 host_001：50岁男性护肤专家，所有 shots[*].characters_in_shot 都必须引用 host_001；"
+                "口播项目中 characters 只能保留 host_001：光希老王，所有 shots[*].characters_in_shot 都必须引用 host_001；"
                 if is_talking_head
                 else ""
             )
@@ -376,6 +379,7 @@ class NarrativeScriptAgent:
             f"如果是讲解/旁白类视频，台词应作为整段连续文案拆分到若干关键 shot；"
             f"如果是广告或氛围表达，可只在开头/结尾/CTA shot 放少量台词，其余 shot 留空。"
             f"shot_index 从 0 连续递增。"
+            f"{regeneration_prompt_section}"
             f"然后调用 write_artifact_tool（artifact_type='narrative_script', "
             f"project_id='{project_id}', version_no={version_no}, summary='叙事剧本 v{version_no}'）写出。"
         )

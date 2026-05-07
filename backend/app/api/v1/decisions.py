@@ -20,7 +20,11 @@ from pydantic import BaseModel, Field
 from app.api.v1.deps import get_current_user, get_request_id, ok
 from app.core.logging import get_logger
 from app.models.user import User
+from app.schemas.event import ProjectEvent
 from app.services.decision_service import DecisionError, DecisionService
+from app.services.event_log_service import event_log_service
+from app.services.regeneration_context_service import REGENERATION_FEEDBACK_EVENT
+from app.repositories.unit_of_work import UnitOfWork
 
 router = APIRouter(prefix="/projects/{project_id}/decisions", tags=["decisions"])
 _logger = get_logger("api.decisions", layer="system")
@@ -36,6 +40,11 @@ class SubmitDecisionRequest(BaseModel):
         min_length=1,
         max_length=64,
         description="用户选择的选项 ID（对应 options_payload 中某项的 id 字段）",
+    )
+    feedback_text: str | None = Field(
+        default=None,
+        max_length=4000,
+        description="选择 regenerate 时的用户返工反馈，会进入下一轮 LLM 生成上下文。",
     )
 
 
@@ -120,6 +129,19 @@ async def select_decision(
       invalid_option   — 选项 ID 不在 options_payload 中
     """
     req_id = get_request_id(request)
+    feedback_text = (body.feedback_text or "").strip()
+    if body.selected_option_id == "regenerate" and not feedback_text:
+        return JSONResponse(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            content={
+                "success": False,
+                "error": {
+                    "code": "feedback_required",
+                    "message": "选择重新生成时必须填写反馈，说明当前产物哪里不满意。",
+                },
+                "request_id": req_id,
+            },
+        )
     try:
         decision = await DecisionService().submit_decision(
             project_id=project_id,
@@ -140,6 +162,26 @@ async def select_decision(
                 "request_id": req_id,
             },
         )
+    if body.selected_option_id == "regenerate":
+        async with UnitOfWork() as uow:
+            await event_log_service.emit(
+                uow.session,
+                ProjectEvent(
+                    project_id=project_id,
+                    aggregate_type="project",
+                    aggregate_id=project_id,
+                    event_type=REGENERATION_FEEDBACK_EVENT,
+                    category="ui",
+                    payload={
+                        "decision_id": decision_id,
+                        "decision_type": decision.get("decision_type"),
+                        "target_entity_type": decision.get("target_entity_type"),
+                        "target_entity_id": decision.get("target_entity_id"),
+                        "selected_option_id": body.selected_option_id,
+                        "feedback_text": feedback_text,
+                    },
+                ),
+            )
     return JSONResponse(
         status_code=status.HTTP_200_OK,
         content=ok(data=decision, request_id=req_id),

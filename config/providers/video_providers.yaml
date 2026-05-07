@@ -12,8 +12,9 @@ video_providers:
   # 支持首尾帧 i2v（doc 21 §3.2）：role=first_frame / role=last_frame
   - name: seedance_2
     display_name: Doubao Seedance 2.0 (高质量)
-    enabled: true
+    enabled: false
     api_type: ark
+    model_name: "doubao-seedance-2-0-260128"
     endpoint: "https://ark.cn-beijing.volces.com/api/v3"
     pricing_ref: image_to_video
     generation_modes:
@@ -35,7 +36,7 @@ video_providers:
     default_params:
       duration: 8
       ratio: "9:16"
-      resolution: "1080p"
+      resolution: "480p"
       generate_audio: true
       watermark: false
     prompt_style: natural
@@ -50,6 +51,7 @@ video_providers:
     display_name: Doubao Seedance 2.0 Fast
     enabled: true
     api_type: ark
+    model_name: "doubao-seedance-2-0-fast-260128"
     endpoint: "https://ark.cn-beijing.volces.com/api/v3"
     pricing_ref: image_to_video
     generation_modes:
@@ -70,7 +72,7 @@ video_providers:
     default_params:
       duration: 8
       ratio: "9:16"
-      resolution: "1080p"
+      resolution: "480p"
       generate_audio: true
       watermark: false
     prompt_style: natural

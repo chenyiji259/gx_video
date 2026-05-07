@@ -338,6 +338,73 @@ class AssetService:
 
         return await _asset_to_dict_presigned(asset)
 
+    async def upload_file_proxy(
+        self,
+        project_id: str,
+        user_id: str,
+        *,
+        filename: str,
+        content_type: str,
+        data: bytes,
+        asset_type: Optional[str] = None,
+        width: Optional[int] = None,
+        height: Optional[int] = None,
+    ) -> dict:
+        """后端代理上传文件，避免浏览器直传 OSS 的 CORS/预检问题。"""
+        await self._assert_project_owned(project_id, user_id)
+        resolved_type = asset_type or self._infer_asset_type(content_type, filename)
+        if resolved_type not in _VALID_ASSET_TYPES:
+            raise AssetError(
+                f"不支持的 asset_type: {resolved_type!r}",
+                code="validation_error",
+            )
+
+        asset_id = generate_ulid()
+        safe_filename = filename[-128:].replace(" ", "_") if filename else "file"
+        object_key = (
+            f"projects/{project_id}/assets/{resolved_type}/{asset_id}/{safe_filename}"
+        )
+        storage = get_storage()
+        bucket_name = storage.default_bucket
+        await storage.async_upload_bytes(object_key, data, content_type=content_type)
+        meta = await storage.async_get_metadata(object_key, bucket=bucket_name)
+        storage_uri = storage.get_permanent_url(object_key, bucket=bucket_name)
+
+        async with UnitOfWork() as uow:
+            repo = AssetRepository(uow.session)
+            asset = Asset(
+                id=asset_id,
+                project_id=project_id,
+                asset_type=resolved_type,
+                bucket_name=bucket_name,
+                object_key=object_key,
+                storage_uri=storage_uri,
+                mime_type=content_type,
+                size_bytes=meta.size,
+                width=width,
+                height=height,
+                metadata_={"original_filename": filename, "upload_mode": "backend_proxy"},
+            )
+            await repo.add(asset)
+            await uow.flush()
+            await uow.session.refresh(asset)
+
+        logger = get_project_logger(project_id, module="services.asset")
+        logger.info(
+            f"Asset proxy upload: id={asset_id!r} type={resolved_type!r} "
+            f"size={meta.size} uri={storage_uri!r}",
+            event_type="asset_proxy_upload_complete",
+        )
+        try:
+            from app.services.asset_sync_service import AssetSyncService
+            await AssetSyncService().sync(asset)
+        except Exception as exc:
+            logger.warning(
+                f"本地副本同步失败（不影响业务）: {exc}",
+                event_type="asset_sync_failed",
+            )
+        return await _asset_to_dict_presigned(asset)
+
     # ------------------------------------------------------------------ #
     # 查询资产列表
     # ------------------------------------------------------------------ #

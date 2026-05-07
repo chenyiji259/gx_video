@@ -6,6 +6,7 @@ import {
   CheckCircle2,
   Clock,
   Download,
+  ImagePlus,
   Lightbulb,
   Maximize,
   PenSquare,
@@ -16,13 +17,15 @@ import {
 } from 'lucide-react';
 import { motion } from 'motion/react';
 import {
+  AUTH_TOKEN_REFRESHED_EVENT,
   ApiError,
+  assetApi,
   getProjectEventsStreamUrl,
   isNotFoundError,
   projectApi,
   workflowApi,
 } from '../api';
-import type { ExportRecord, NarrativeShot, Shot, ViewState, WorkspaceData } from '../types';
+import type { AssetRecord, ExportRecord, NarrativeShot, Shot, ViewState, WorkspaceData } from '../types';
 
 interface WorkspaceProps {
   projectId: string;
@@ -36,20 +39,30 @@ const STAGE_TO_STEP: Record<string, number> = {
   narrative_ready: 2,
   shot_plan_ready: 2,
   storyboard_ready: 3,
-  clips_generating: 5,
   clips_ready: 5,
+  clips_generating: 5,
   timeline_ready: 6,
   export_ready: 6,
   completed: 6,
 };
+
+const WORKFLOW_STEPS = [
+  { step: 1, title: '输入需求', description: '填写视频目标' },
+  { step: 2, title: '创意剧本包', description: '审稿并确认' },
+  { step: 3, title: '故事大图', description: '查看 Production Board' },
+  { step: 4, title: '确认生成', description: '进入视频生成' },
+  { step: 5, title: '视频生成', description: '播放片段' },
+  { step: 6, title: '拼接导出', description: '生成最终视频' },
+];
 
 const DEFAULT_FORM = {
   prompt: '',
   platform: 'tiktok',
   duration: 60,
   audience: '',
-  style: '专家知识口播，专业、亲和、干净护肤科普，纯净无字幕画面',
+  style: '知识口播，专业、亲和、干净护肤科普，纯净无字幕画面',
   humanOnCamera: true,
+  productReferenceAssetIds: [] as string[],
 };
 
 const FIXED_ASPECT_RATIO = '9:16';
@@ -59,7 +72,7 @@ const TALKING_HEAD_PROFILE = 'talking_head_production_board';
 const TALKING_HEAD_LAYOUT = 'talking_head_story_overview_board';
 const TALKING_HEAD_SEGMENT_DURATION_SEC = 15;
 const TALKING_HEAD_STORY_BOARD_ASPECT_RATIO = '21:9';
-const TALKING_HEAD_STYLE_PREFERENCE = '专家知识口播，专业、亲和、干净护肤科普，纯净无字幕画面';
+const TALKING_HEAD_STYLE_PREFERENCE = '知识口播，专业、亲和、干净护肤科普，纯净无字幕画面';
 const TALKING_HEAD_DURATION_OPTIONS = [15, 30, 45, 60, 75, 90];
 const WORKSPACE_REFRESH_EVENT_TYPES = new Set([
   'project_created',
@@ -213,6 +226,78 @@ const safeText = (value: unknown, fallback = '待生成') => {
   return fallback;
 };
 
+const isPlainRecord = (value: unknown): value is Record<string, unknown> =>
+  Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+
+const FIELD_LABELS: Record<string, string> = {
+  title: '标题',
+  summary: '创意摘要',
+  style_direction: '风格方向',
+  mood_tags: '情绪标签',
+  story_arc: '故事弧线',
+  target_audience: '目标受众',
+  audience: '目标受众',
+  platform: '发布平台',
+  duration: '视频时长',
+  duration_sec: '视频时长',
+  objective: '创作目标',
+  goal: '创作目标',
+  concept: '核心概念',
+  logline: '一句话创意',
+  hook: '开场钩子',
+  core_message: '核心信息',
+  key_message: '关键信息',
+  selling_points: '卖点',
+  product_name: '产品名称',
+  product_benefits: '产品利益点',
+  pain_points: '用户痛点',
+  call_to_action: '行动引导',
+  cta: '行动引导',
+  tone: '表达语气',
+  visual_style: '视觉风格',
+  emotional_tone: '情绪基调',
+  constraints: '创作约束',
+  section_mapping: '结构节奏',
+  character: '人物',
+  characters: '人物设定',
+  scenes: '场景设定',
+  scene: '场景',
+  role: '角色',
+  name: '名称',
+  description: '说明',
+  traits: '特征',
+  motivation: '动机',
+  location: '地点',
+  lighting: '光线',
+  props: '道具',
+};
+
+const fieldLabel = (key: string) => FIELD_LABELS[key] || '';
+
+const formatRichValue = (value: unknown, fallback = '待生成') => {
+  if (typeof value === 'string' && value.trim()) return value.trim();
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (Array.isArray(value)) {
+    const items = value
+      .map((item) => formatRichValue(item, ''))
+      .filter(Boolean);
+    return items.length ? items.join('、') : fallback;
+  }
+  if (isPlainRecord(value)) {
+    const text = Object.entries(value)
+      .filter(([, entryValue]) => entryValue !== null && entryValue !== undefined && entryValue !== '')
+      .map(([key, entryValue]) => `${fieldLabel(key) || '补充'}：${formatRichValue(entryValue, '')}`)
+      .join('；');
+    return text || fallback;
+  }
+  return fallback;
+};
+
+const rawPayloadEntries = (payload?: Record<string, unknown> | null, exclude: string[] = []) =>
+  Object.entries(payload ?? {})
+    .filter(([key, value]) => !exclude.includes(key) && value !== null && value !== undefined && value !== '')
+    .slice(0, 12);
+
 const getPlatformLabel = (value: string) =>
   PLATFORM_OPTIONS.find((platform) => platform.value === value)?.label || value;
 
@@ -250,17 +335,24 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [step6LockedAction, setStep6LockedAction] = useState<'compose-timeline' | 'trigger-export' | 'download-export' | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selectedShotIndex, setSelectedShotIndex] = useState(0);
   const [playMode, setPlayMode] = useState<'selected' | 'sequence'>('selected');
   const [shouldAutoPlay, setShouldAutoPlay] = useState(false);
   const [form, setForm] = useState(DEFAULT_FORM);
+  const [productAssets, setProductAssets] = useState<AssetRecord[]>([]);
+  const [uploadingProducts, setUploadingProducts] = useState(false);
+  const [activeStep, setActiveStep] = useState(1);
   const [imagePreview, setImagePreview] = useState<{ title: string; url: string; description?: string } | null>(null);
+  const [creativePackageFeedback, setCreativePackageFeedback] = useState('');
+  const [storyboardFeedback, setStoryboardFeedback] = useState('');
   const [stablePreviewSource, setStablePreviewSource] = useState<{ key: string; url: string }>({
     key: '',
     url: '',
   });
   const videoRef = useRef<HTMLVideoElement>(null);
+  const productInputRef = useRef<HTMLInputElement>(null);
   const eventRefreshTimerRef = useRef<number | null>(null);
   const autoRefreshPollTimerRef = useRef<number | null>(null);
   const autoRefreshStopAtRef = useRef<number | null>(null);
@@ -361,7 +453,26 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
   }, [projectId]);
 
   useEffect(() => {
-    const eventSource = new EventSource(getProjectEventsStreamUrl(projectId));
+    setStep6LockedAction(null);
+  }, [projectId]);
+
+  useEffect(() => {
+    if (!workspace || !step6LockedAction) return;
+    if (workspace.project.current_stage === 'failed') {
+      setStep6LockedAction(null);
+      return;
+    }
+    if (step6LockedAction === 'compose-timeline' && workspace.timeline) {
+      setStep6LockedAction(null);
+      return;
+    }
+    if (step6LockedAction === 'trigger-export' && workspace.latestExport) {
+      setStep6LockedAction(null);
+    }
+  }, [step6LockedAction, workspace?.latestExport, workspace?.project.current_stage, workspace?.timeline]);
+
+  useEffect(() => {
+    let eventSource: EventSource | null = null;
 
     const scheduleWorkspaceRefresh = () => {
       if (eventRefreshTimerRef.current !== null) {
@@ -373,23 +484,32 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
       }, 350);
     };
 
-    eventSource.onmessage = (message) => {
-      try {
-        const event = JSON.parse(message.data) as { event_type?: string };
-        if (event.event_type && WORKSPACE_REFRESH_EVENT_TYPES.has(event.event_type)) {
-          scheduleWorkspaceRefresh();
+    const connectEventSource = () => {
+      eventSource?.close();
+      eventSource = new EventSource(getProjectEventsStreamUrl(projectId));
+
+      eventSource.onmessage = (message) => {
+        try {
+          const event = JSON.parse(message.data) as { event_type?: string };
+          if (event.event_type && WORKSPACE_REFRESH_EVENT_TYPES.has(event.event_type)) {
+            scheduleWorkspaceRefresh();
+          }
+        } catch {
+          // 忽略无法解析的 SSE 消息，后端心跳不会进入 onmessage。
         }
-      } catch {
-        // 忽略无法解析的 SSE 消息，后端心跳不会进入 onmessage。
-      }
+      };
+
+      eventSource.onerror = () => {
+        // EventSource 会自动重连，不能在这里 close，否则一次短暂断线后就不会再收到生成完成事件。
+      };
     };
 
-    eventSource.onerror = () => {
-      // EventSource 会自动重连，不能在这里 close，否则一次短暂断线后就不会再收到生成完成事件。
-    };
+    connectEventSource();
+    window.addEventListener(AUTH_TOKEN_REFRESHED_EVENT, connectEventSource);
 
     return () => {
-      eventSource.close();
+      window.removeEventListener(AUTH_TOKEN_REFRESHED_EVENT, connectEventSource);
+      eventSource?.close();
       if (eventRefreshTimerRef.current !== null) {
         window.clearTimeout(eventRefreshTimerRef.current);
         eventRefreshTimerRef.current = null;
@@ -400,6 +520,7 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
 
   useEffect(() => {
     if (!workspace?.spec) return;
+    const productReferenceAssetIds = workspace.spec.output_config?.product_reference_asset_ids || [];
     setForm({
       prompt: workspace.spec.user_prompt || '',
       platform: workspace.spec.output_config?.platform || 'tiktok',
@@ -407,8 +528,30 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
       audience: workspace.spec.output_config?.target_audience || '',
       style: workspace.spec.output_config?.style_preference || TALKING_HEAD_STYLE_PREFERENCE,
       humanOnCamera: Boolean(workspace.spec.output_config?.human_on_camera),
+      productReferenceAssetIds,
     });
-  }, [workspace?.spec]);
+    if (!productReferenceAssetIds.length) {
+      setProductAssets([]);
+      return;
+    }
+
+    let cancelled = false;
+    void assetApi.listAssets(projectId, { asset_type: 'image_reference', limit: 200 }).then((result) => {
+      if (cancelled) return;
+      const assetsById = new Map(result.items.map((asset) => [asset.id, asset]));
+      setProductAssets(
+        productReferenceAssetIds
+          .map((assetId) => assetsById.get(assetId))
+          .filter((asset): asset is AssetRecord => Boolean(asset))
+      );
+    }).catch(() => {
+      if (!cancelled) setProductAssets([]);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId, workspace?.spec]);
 
   const sortedShots = useMemo(
     () => [...(workspace?.shots ?? [])].sort((a, b) => a.shot_index - b.shot_index),
@@ -543,6 +686,14 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
 
   const currentStep = workspace ? STAGE_TO_STEP[workspace.project.current_stage] || 1 : 1;
 
+  useEffect(() => {
+    setActiveStep((prev) => {
+      if (currentStep > prev) return currentStep;
+      if (prev > Math.max(currentStep, 1) && currentStep < 6) return currentStep;
+      return prev;
+    });
+  }, [currentStep]);
+
   const clipProgress = useMemo(() => {
     const total = sortedShots.length || 0;
     const completed = workspace?.clips.length || 0;
@@ -607,7 +758,76 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
     }
   };
 
+  const readImageSize = (file: File) =>
+    new Promise<{ width: number; height: number }>((resolve) => {
+      const url = URL.createObjectURL(file);
+      const image = new Image();
+      image.onload = () => {
+        resolve({ width: image.naturalWidth, height: image.naturalHeight });
+        URL.revokeObjectURL(url);
+      };
+      image.onerror = () => {
+        resolve({ width: 0, height: 0 });
+        URL.revokeObjectURL(url);
+      };
+      image.src = url;
+    });
+
+  const uploadProductFile = async (file: File) => {
+    const size = await readImageSize(file);
+    return assetApi.uploadFile(projectId, {
+      file,
+      asset_type: 'image_reference',
+      width: size.width || undefined,
+      height: size.height || undefined,
+    });
+  };
+
+  const handleProductUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files || []).filter((file) => file.type.startsWith('image/'));
+    event.target.value = '';
+    if (!files.length) return;
+    const remaining = Math.max(0, 3 - form.productReferenceAssetIds.length);
+    if (remaining <= 0) {
+      setError('产品图最多上传 3 张。');
+      return;
+    }
+    if (files.length > remaining) {
+      setError(`产品图最多 3 张，本次只会上传前 ${remaining} 张。`);
+    } else {
+      setError(null);
+    }
+    setUploadingProducts(true);
+    try {
+      const uploaded: AssetRecord[] = [];
+      for (const file of files.slice(0, remaining)) {
+        uploaded.push(await uploadProductFile(file));
+      }
+      setProductAssets((prev) => [...prev, ...uploaded].slice(0, 3));
+      setForm((prev) => ({
+        ...prev,
+        productReferenceAssetIds: [
+          ...prev.productReferenceAssetIds,
+          ...uploaded.map((asset) => asset.id),
+        ].slice(0, 3),
+      }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '产品图上传失败');
+    } finally {
+      setUploadingProducts(false);
+    }
+  };
+
+  const handleRemoveProductAsset = (assetId: string) => {
+    setProductAssets((prev) => prev.filter((asset) => asset.id !== assetId));
+    setForm((prev) => ({
+      ...prev,
+      productReferenceAssetIds: prev.productReferenceAssetIds.filter((id) => id !== assetId),
+    }));
+  };
+
   const handleGeneratePlan = async () => {
+    setActiveStep(2);
     await handleAction('generate-creative-package', async () => {
       const version = await projectApi.createSpecVersion(projectId, {
         user_prompt: form.prompt,
@@ -625,6 +845,7 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
         story_board_aspect_ratio: TALKING_HEAD_STORY_BOARD_ASPECT_RATIO,
         style_preset_locked: true,
         subtitles_enabled: false,
+        product_reference_asset_ids: form.productReferenceAssetIds,
       });
       await projectApi.activateSpec(projectId, version.id);
       await workflowApi.generateCreativePackage(projectId);
@@ -632,6 +853,7 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
   };
 
   const handleConfirmCreativePackage = async () => {
+    setActiveStep(3);
     await handleAction('generate-storyboard', async () => {
       if (creativePackageDecision) {
         await projectApi.selectDecision(
@@ -645,20 +867,34 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
   };
 
   const handleRegenerateCreativePackage = async () => {
+    const feedback = creativePackageFeedback.trim();
+    if (!feedback) {
+      setError('请先填写对当前创意剧本包的不满意点，系统会用这段反馈重新生成。');
+      return;
+    }
+    setActiveStep(2);
     await handleAction('regenerate-creative-package', async () => {
       if (creativePackageDecision) {
-        await projectApi.selectDecision(projectId, creativePackageDecision.id, 'regenerate');
+        await projectApi.selectDecision(projectId, creativePackageDecision.id, 'regenerate', feedback);
       }
       await workflowApi.generateCreativePackage(projectId);
+      setCreativePackageFeedback('');
     });
   };
 
   const handleRegenerateKeyframes = async () => {
+    const feedback = storyboardFeedback.trim();
+    if (!feedback) {
+      setError('请先填写对当前故事大图/关键帧的不满意点，系统会用这段反馈重新生成。');
+      return;
+    }
+    setActiveStep(3);
     await handleAction('regenerate-storyboard', async () => {
       if (storyboardDecision) {
-        await projectApi.selectDecision(projectId, storyboardDecision.id, 'regenerate');
+        await projectApi.selectDecision(projectId, storyboardDecision.id, 'regenerate', feedback);
       }
       await workflowApi.generateStoryboard(projectId);
+      setStoryboardFeedback('');
     });
   };
 
@@ -669,6 +905,7 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
   };
 
   const handleRetryClipStage = async () => {
+    setActiveStep(5);
     await handleAction('retry-generate-clips', async () => {
       await workflowApi.generateClips(projectId);
     });
@@ -689,6 +926,7 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
       || storyboardDecision
       || (storyboardConfirmed && workspace.clips.length < sortedShots.length)
     ) {
+      setActiveStep(5);
       await handleAction('generate-clips', async () => {
         if (storyboardDecision) {
           await projectApi.selectDecision(
@@ -705,15 +943,19 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
   };
 
   const handleExportPrimary = async () => {
-    if (!workspace) return;
+    if (!workspace || isStep6Locked) return;
+    setActiveStep(6);
     if (!workspace.timeline && workspace.clips.length) {
+      setStep6LockedAction('compose-timeline');
       await handleAction('compose-timeline', () => workflowApi.composeTimeline(projectId));
       return;
     }
     if (!workspace.latestExport && workspace.timeline) {
+      setStep6LockedAction('trigger-export');
       const exportRecord = await handleAction('trigger-export', () => workflowApi.triggerExport(projectId, '1080p'));
       if (exportRecord?.storage_uri) {
         triggerBrowserDownload(exportRecord.storage_uri, makeExportFilename(projectId, exportRecord));
+        setStep6LockedAction('download-export');
       } else if (exportRecord) {
         setError('导出已完成，但后端没有返回可下载地址。请刷新后再试。');
       }
@@ -724,10 +966,12 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
         workspace.latestExport.storage_uri,
         makeExportFilename(projectId, workspace.latestExport)
       );
+      setStep6LockedAction('download-export');
       return;
     }
     if (workspace.timeline?.preview_uri) {
       triggerBrowserDownload(workspace.timeline.preview_uri, `vidmuse_${projectId}_timeline_preview.mp4`);
+      setStep6LockedAction('download-export');
     }
   };
 
@@ -844,12 +1088,102 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
     : !workspace.latestExport
       ? '导出视频'
       : '下载视频';
+  const step6EffectiveAction = actionLoading === 'compose-timeline' || actionLoading === 'trigger-export'
+    ? actionLoading
+    : step6LockedAction;
+  const isStep6Locked = Boolean(step6EffectiveAction);
+  const step6ButtonLabel = step6EffectiveAction === 'compose-timeline'
+    ? '拼接中...'
+    : step6EffectiveAction === 'trigger-export'
+      ? '导出中...'
+      : step6EffectiveAction === 'download-export'
+        ? '已下载'
+        : primaryStep6Label;
   const step2PrimaryLabel = creativePackageDecision
     ? (creativePackageConfirmOption?.title || creativePackageConfirmOption?.label || '确认创意剧本包并生成关键帧')
     : workspace.narrative
       ? '创意剧本包已生成'
       : '等待生成';
   const step3PrimaryLabel = primaryStep3Label;
+  const briefRawEntries = rawPayloadEntries(workspace.brief?.raw_payload, [
+    'title',
+    'summary',
+    'style_direction',
+    'mood_tags',
+  ]);
+  const narrativeRawEntries = rawPayloadEntries(workspace.narrative?.raw_payload, [
+    'shots',
+    'story_arc',
+    'characters',
+    'scenes',
+    'section_mapping',
+  ]);
+  const creativeSupplementEntries = [...briefRawEntries, ...narrativeRawEntries]
+    .map(([key, value]) => ({ label: fieldLabel(key), value }))
+    .filter((item) => item.label)
+    .slice(0, 8);
+  const narrativeCharacters = (
+    workspace.narrative?.characters?.length
+      ? workspace.narrative.characters
+      : Array.isArray(workspace.narrative?.raw_payload?.characters)
+        ? workspace.narrative.raw_payload.characters
+        : []
+  ).slice(0, 4);
+  const narrativeScenes = (
+    workspace.narrative?.scenes?.length
+      ? workspace.narrative.scenes
+      : Array.isArray(workspace.narrative?.raw_payload?.scenes)
+        ? workspace.narrative.raw_payload.scenes
+        : []
+  ).slice(0, 4);
+  const sectionMappings = (
+    workspace.narrative?.section_mapping?.length
+      ? workspace.narrative.section_mapping
+      : Array.isArray(workspace.narrative?.raw_payload?.section_mapping)
+        ? workspace.narrative.raw_payload.section_mapping
+        : []
+  ).slice(0, 6);
+  const creativeOverviewCards = [
+    { label: '视频主题', value: workspace.brief?.title },
+    { label: '创意摘要', value: workspace.brief?.summary },
+    { label: '风格方向', value: workspace.brief?.style_direction || form.style },
+    { label: '情绪标签', value: workspace.brief?.mood_tags },
+    { label: '故事弧', value: workspace.narrative?.story_arc || workspace.narrative?.raw_payload?.story_arc },
+    { label: '发布平台', value: getPlatformLabel(form.platform) },
+    { label: '目标受众', value: form.audience || workspace.spec?.output_config?.target_audience },
+    { label: '视频规格', value: `${workspace.spec?.output_config?.aspect_ratio || FIXED_ASPECT_RATIO} · ${workspace.spec?.output_config?.video_resolution || FIXED_VIDEO_RESOLUTION} · ${form.duration}秒` },
+  ];
+  const highestReachableStep = Math.max(currentStep, activeStep);
+  const completedShotCount = workspace.clips.length;
+  const totalShotCount = sortedShots.length;
+  const allClipsReady = totalShotCount > 0 && completedShotCount >= totalShotCount;
+  const isWorkflowStepComplete = (step: number) => {
+    if (step === 1) return Boolean(workspace.spec);
+    if (step === 2) return Boolean(workspace.narrative) && !creativePackageDecision;
+    if (step === 3) return Boolean(workspace.storyboardGrids.length);
+    if (step === 4) return storyboardConfirmed || currentStep >= 5 || Boolean(workspace.clips.length);
+    if (step === 5) return allClipsReady;
+    if (step === 6) return Boolean(workspace.latestExport || workspace.timeline);
+    return false;
+  };
+
+  const renderLoadingState = (title: string, description: string) => (
+    <div className="flex min-h-[360px] flex-1 flex-col items-center justify-center rounded-2xl border border-violet-100 bg-violet-50/40 px-8 text-center">
+      <motion.div
+        className="mb-5 h-16 w-16 rounded-full border-4 border-violet-200 border-t-violet-600"
+        animate={{ rotate: 360 }}
+        transition={{ duration: 1.1, repeat: Infinity, ease: 'linear' }}
+      />
+      <div className="text-lg font-bold text-gray-900">{title}</div>
+      <div className="mt-2 max-w-md text-sm text-gray-500">{description}</div>
+      <button
+        onClick={() => void handleAction('refresh-workspace', () => loadWorkspace(false))}
+        className="mt-5 inline-flex items-center gap-2 rounded-xl border border-violet-100 bg-white px-4 py-2 text-sm font-medium text-violet-700 hover:bg-violet-50"
+      >
+        <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} /> 刷新数据
+      </button>
+    </div>
+  );
 
   return (
     <div className="h-screen bg-[#f3f4f9] text-gray-900 font-sans p-2 overflow-hidden flex flex-col w-full relative">
@@ -872,6 +1206,586 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
         ) : null}
       </div>
 
+      <div className="mt-10 flex min-h-0 flex-1 flex-col gap-3">
+        {error ? (
+          <div className="rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-600">
+            {error}
+          </div>
+        ) : null}
+
+        <div className="rounded-2xl border border-gray-100 bg-white px-4 py-3 shadow-sm shadow-gray-200/50">
+          <div className="grid grid-cols-6 gap-2">
+            {WORKFLOW_STEPS.map((item) => {
+              const isActive = activeStep === item.step;
+              const isComplete = isWorkflowStepComplete(item.step);
+              const canOpen = item.step <= highestReachableStep;
+              return (
+                <button
+                  key={item.step}
+                  type="button"
+                  onClick={() => canOpen && setActiveStep(item.step)}
+                  disabled={!canOpen}
+                  className={`flex min-w-0 items-center gap-2 rounded-xl border px-3 py-2 text-left transition-colors ${
+                    isActive
+                      ? 'border-violet-200 bg-violet-50 text-violet-800 shadow-sm'
+                      : isComplete
+                        ? 'border-emerald-100 bg-emerald-50/60 text-emerald-800'
+                        : canOpen
+                          ? 'border-gray-200 bg-white text-gray-600 hover:bg-gray-50'
+                          : 'border-gray-100 bg-gray-50 text-gray-300'
+                  }`}
+                >
+                  <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-xs font-bold ${
+                    isComplete ? 'bg-emerald-500 text-white' : isActive ? 'bg-violet-600 text-white' : 'bg-gray-200 text-gray-500'
+                  }`}>
+                    {isComplete ? <CheckCircle2 className="h-4 w-4" /> : item.step}
+                  </div>
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-bold">{item.title}</div>
+                    <div className="truncate text-[11px] opacity-70">{item.description}</div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <Card className="flex-1 overflow-hidden p-5">
+          {activeStep === 1 ? (
+            <>
+              <StepBadge step="1" title="输入需求" />
+              <div className="grid min-h-0 flex-1 grid-cols-[1.2fr_0.8fr] gap-5 overflow-hidden">
+                <div className="flex min-h-0 flex-col rounded-2xl border border-gray-100 bg-gray-50 p-4">
+                  <div className="mb-4 flex gap-3">
+                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-indigo-100">
+                      <Bot className="h-5 w-5 text-indigo-600" />
+                    </div>
+                    <div className="rounded-2xl rounded-tl-none bg-white p-3 text-sm text-gray-700 shadow-sm">
+                      你好！我是AI视频创作助手<br />请描述你想要制作的视频内容
+                    </div>
+                  </div>
+                  <textarea
+                    value={form.prompt}
+                    onChange={(e) => setForm((prev) => ({ ...prev, prompt: e.target.value }))}
+                    className="min-h-36 flex-1 resize-none rounded-2xl border border-gray-200 bg-white p-4 text-sm text-gray-800 outline-none focus:border-violet-300"
+                    placeholder="请输入你的视频需求..."
+                  />
+                  <div className="mt-4 grid grid-cols-3 gap-3">
+                    <select
+                      value={PLATFORM_OPTIONS.some((item) => item.value === form.platform) ? form.platform : '__custom__'}
+                      onChange={(e) => setForm((prev) => ({ ...prev, platform: e.target.value === '__custom__' ? '' : e.target.value }))}
+                      className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 outline-none"
+                      aria-label="发布平台"
+                    >
+                      {PLATFORM_OPTIONS.map((platform) => (
+                        <option key={platform.value} value={platform.value}>{platform.label}</option>
+                      ))}
+                      <option value="__custom__">自定义平台</option>
+                    </select>
+                    <select
+                      value={form.duration}
+                      onChange={(e) => setForm((prev) => ({ ...prev, duration: Number(e.target.value || 60) }))}
+                      className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 outline-none"
+                      aria-label="视频时长"
+                    >
+                      {TALKING_HEAD_DURATION_OPTIONS.map((duration) => (
+                        <option key={duration} value={duration}>{duration}s</option>
+                      ))}
+                    </select>
+                    <select
+                      value={AUDIENCE_OPTIONS.includes(form.audience) ? form.audience : '__custom__'}
+                      onChange={(e) => setForm((prev) => ({ ...prev, audience: e.target.value === '__custom__' ? '' : e.target.value }))}
+                      className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 outline-none"
+                      aria-label="目标受众"
+                    >
+                      {AUDIENCE_OPTIONS.map((audience) => (
+                        <option key={audience} value={audience}>{audience}</option>
+                      ))}
+                      <option value="__custom__">自定义受众</option>
+                    </select>
+                    <input
+                      value={form.audience}
+                      onChange={(e) => setForm((prev) => ({ ...prev, audience: e.target.value }))}
+                      className="col-span-2 rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 outline-none"
+                      placeholder="也可以直接输入目标受众"
+                    />
+                    <label className="flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700">
+                      <input
+                        type="checkbox"
+                        checked={form.humanOnCamera}
+                        onChange={(e) => setForm((prev) => ({ ...prev, humanOnCamera: e.target.checked }))}
+                        className="h-4 w-4 rounded border-gray-300 text-violet-600"
+                      />
+                      真人入镜
+                    </label>
+                    <div className="col-span-3 rounded-2xl border border-gray-200 bg-white p-3">
+                      <div className="mb-2 flex items-center justify-between gap-3">
+                        <div>
+                          <div className="text-sm font-semibold text-gray-900">产品图</div>
+                          <div className="text-xs text-gray-400">最多 3 张，上传后会作为真实产品参考进入图片和视频提示词</div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => productInputRef.current?.click()}
+                          disabled={uploadingProducts || form.productReferenceAssetIds.length >= 3}
+                          className="inline-flex items-center gap-1 rounded-lg border border-violet-100 bg-violet-50 px-3 py-2 text-xs font-medium text-violet-700 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          <ImagePlus className="h-4 w-4" />
+                          {uploadingProducts ? '上传中' : '上传'}
+                        </button>
+                        <input
+                          ref={productInputRef}
+                          type="file"
+                          accept="image/*"
+                          multiple
+                          className="hidden"
+                          onChange={handleProductUpload}
+                        />
+                      </div>
+                      {productAssets.length ? (
+                        <div className="grid grid-cols-3 gap-2">
+                          {productAssets.map((asset, index) => (
+                            <div key={asset.id} className="group relative aspect-[4/3] overflow-hidden rounded-lg border border-gray-100 bg-gray-50">
+                              <img src={asset.storage_uri} alt={`产品图 ${index + 1}`} className="h-full w-full object-cover" />
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveProductAsset(asset.id)}
+                                className="absolute right-1 top-1 rounded-md bg-white/90 px-1.5 py-0.5 text-[10px] font-medium text-gray-600 opacity-0 shadow-sm transition group-hover:opacity-100"
+                              >
+                                移除
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      ) : form.productReferenceAssetIds.length ? (
+                        <div className="rounded-lg bg-gray-50 px-3 py-2 text-xs text-gray-500">
+                          已关联 {form.productReferenceAssetIds.length} 张产品图
+                        </div>
+                      ) : (
+                        <div className="rounded-lg border border-dashed border-gray-200 bg-gray-50 px-3 py-4 text-center text-xs text-gray-400">
+                          可选上传；上传后创作、故事大图、视频提示词都会明确引用产品图。
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+                <div className="flex min-h-0 flex-col">
+                  <div className="mb-4 rounded-2xl border border-gray-100 bg-gray-50 p-4">
+                    <h4 className="mb-3 text-sm font-bold text-gray-900">AI 理解的创作方向</h4>
+                    <div className="grid grid-cols-2 gap-3">
+                      {directionCards.map((item) => (
+                        <div key={item.label} className="rounded-xl border border-gray-100 bg-white p-3 shadow-sm">
+                          <div className="mb-1 text-xs font-medium text-violet-500">{item.label}</div>
+                          <div className="line-clamp-3 text-sm text-gray-800">{item.value}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="mb-4 rounded-2xl border border-gray-100 bg-white p-4 text-sm text-gray-600">
+                    <div className="mb-1 text-xs font-medium text-gray-400">固定口播风格</div>
+                    <div className="font-medium text-gray-900">{TALKING_HEAD_STYLE_PREFERENCE}</div>
+                  </div>
+                  <button
+                    onClick={() => void handleGeneratePlan()}
+                    disabled={actionLoading === 'generate-creative-package' || !form.prompt.trim()}
+                    className="mt-auto flex w-full items-center justify-center gap-2 rounded-xl bg-violet-600 py-3 text-sm font-medium text-white shadow-lg shadow-violet-200 transition-colors hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {actionLoading === 'generate-creative-package' ? '生成中...' : '生成创意剧本包'} <ArrowRight className="h-4 w-4" />
+                  </button>
+                </div>
+              </div>
+            </>
+          ) : null}
+
+          {activeStep === 2 ? (
+            <>
+              <StepBadge step="2" title="创意剧本包" />
+              {!workspace.narrative ? renderLoadingState('创意剧本包生成中', '前端会停留在当前阶段等待后端写入剧本包数据，数据到达后自动展示确认界面。') : (
+                <div className="flex min-h-0 flex-1 flex-col">
+                  <div className="mb-4 grid grid-cols-4 gap-3">
+                    {creativeOverviewCards.map((item) => (
+                      <div key={item.label} className="rounded-2xl border border-gray-100 bg-gray-50 p-3">
+                        <div className="mb-1 text-xs font-medium text-gray-400">{item.label}</div>
+                        <div className="line-clamp-3 text-sm font-semibold text-gray-900">{formatRichValue(item.value)}</div>
+                      </div>
+                    ))}
+                  </div>
+                  {creativePackageDecision ? (
+                    <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                      创意剧本包已生成，确认后进入故事大图生成；也可以重新生成当前剧本包。
+                    </div>
+                  ) : null}
+                  <div className="min-h-0 flex-1 overflow-y-auto rounded-2xl border border-gray-100 bg-white">
+                    <div className="border-b border-gray-100 bg-gray-50 p-4">
+                      <div className="mb-3 flex items-center justify-between">
+                        <div>
+                          <div className="text-sm font-bold text-gray-900">1. 创意方向总览</div>
+                          <div className="text-xs text-gray-500">先看主题、风格、受众和最终交付规格是否正确。</div>
+                        </div>
+                        <div className="rounded-full bg-white px-3 py-1 text-xs font-medium text-violet-600">
+                          {scriptShots.length} 个 Segment
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-4 gap-3">
+                        {creativeOverviewCards.map((item) => (
+                          <div key={`overview-${item.label}`} className="rounded-xl bg-white p-3 shadow-sm">
+                            <div className="mb-1 text-xs font-medium text-gray-400">{item.label}</div>
+                            <div className="line-clamp-3 text-sm font-semibold text-gray-900">{formatRichValue(item.value)}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="border-b border-gray-100 p-4">
+                      <div className="mb-3 text-sm font-bold text-gray-900">2. 人物、场景与创作策略</div>
+                      <div className="grid grid-cols-3 gap-3">
+                        <div className="rounded-2xl border border-gray-100 bg-gray-50 p-3">
+                          <div className="mb-2 text-xs font-bold text-gray-900">人物设定</div>
+                          <div className="space-y-2">
+                            {narrativeCharacters.length ? narrativeCharacters.map((item, index) => (
+                              <div key={index} className="rounded-xl bg-white p-3 text-xs leading-5 text-gray-600 shadow-sm">
+                                {formatRichValue(item)}
+                              </div>
+                            )) : (
+                              <div className="rounded-xl bg-white p-3 text-xs text-gray-400">未返回独立人物设定，以下方分段脚本为准。</div>
+                            )}
+                          </div>
+                        </div>
+                        <div className="rounded-2xl border border-gray-100 bg-gray-50 p-3">
+                          <div className="mb-2 text-xs font-bold text-gray-900">场景设定</div>
+                          <div className="space-y-2">
+                            {narrativeScenes.length ? narrativeScenes.map((item, index) => (
+                              <div key={index} className="rounded-xl bg-white p-3 text-xs leading-5 text-gray-600 shadow-sm">
+                                {formatRichValue(item)}
+                              </div>
+                            )) : (
+                              <div className="rounded-xl bg-white p-3 text-xs text-gray-400">未返回独立场景设定，以下方分段脚本为准。</div>
+                            )}
+                          </div>
+                        </div>
+                        <div className="rounded-2xl border border-gray-100 bg-gray-50 p-3">
+                          <div className="mb-2 text-xs font-bold text-gray-900">创作策略补充</div>
+                          <div className="space-y-2">
+                            {creativeSupplementEntries.length ? creativeSupplementEntries.map((item) => (
+                              <div key={item.label} className="rounded-xl bg-white p-3 text-xs leading-5 text-gray-600 shadow-sm">
+                                <span className="font-semibold text-gray-900">{item.label}：</span>{formatRichValue(item.value)}
+                              </div>
+                            )) : (
+                              <div className="rounded-xl bg-white p-3 text-xs text-gray-400">暂无可翻译的补充字段。</div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {sectionMappings.length ? (
+                      <div className="border-b border-gray-100 p-4">
+                        <div className="mb-3 text-sm font-bold text-gray-900">3. 内容结构节奏</div>
+                        <div className="grid grid-cols-3 gap-3">
+                          {sectionMappings.map((item, index) => (
+                            <div key={index} className="rounded-xl border border-gray-100 bg-gray-50 p-3 text-xs leading-5 text-gray-600">
+                              <div className="mb-1 font-bold text-gray-900">段落 {index + 1}</div>
+                              {formatRichValue(item)}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+
+                    <div className="border-b border-gray-100 bg-gray-50 px-4 py-3 text-sm font-bold text-gray-900">
+                      {sectionMappings.length ? '4' : '3'}. 分段脚本明细
+                    </div>
+                    {scriptShots.map((shot, index) => (
+                      <div key={`${shot.shot_index ?? index}-${index}`} className="border-b border-gray-50 p-4">
+                        <div className="mb-3 flex flex-wrap items-center gap-3">
+                          <div className="rounded-full bg-violet-50 px-3 py-1 text-sm font-bold text-violet-700">S{(shot.shot_index ?? index) + 1}</div>
+                          <div className="text-sm font-medium text-gray-500">{formatScriptTimeRange(shot, scriptShots, index)}</div>
+                          {shot.duration_sec || shot.duration_ms ? (
+                            <div className="text-xs text-gray-400">时长：{shot.duration_sec ? `${shot.duration_sec}s` : formatDurationLabel(shot.duration_ms)}</div>
+                          ) : null}
+                          {shot.location ? <div className="text-xs text-gray-400">场景：{shot.location}</div> : null}
+                        </div>
+                        <div className="grid grid-cols-[1fr_1fr_1.2fr] gap-3">
+                          <div className="rounded-xl bg-gray-50 p-3">
+                            <div className="mb-1 text-xs font-medium text-gray-400">镜头内容</div>
+                            <div className="text-sm leading-6 text-gray-800">{getScriptShotContent(shot)}</div>
+                          </div>
+                          <div className="rounded-xl bg-gray-50 p-3">
+                            <div className="mb-1 text-xs font-medium text-gray-400">视觉 / 动作 / 镜头语言</div>
+                            <div className="space-y-2 text-sm leading-6 text-gray-700">
+                              {shot.visual_description ? <div>{shot.visual_description}</div> : null}
+                              {shot.action_description ? <div>{shot.action_description}</div> : null}
+                              {shot.camera_language ? <div>{shot.camera_language}</div> : null}
+                              {!shot.visual_description && !shot.action_description && !shot.camera_language ? <div className="text-gray-400">暂无展开字段</div> : null}
+                            </div>
+                          </div>
+                          <div className="rounded-xl bg-gray-50 p-3">
+                            <div className="mb-1 text-xs font-medium text-gray-400">口播台词</div>
+                            <div className="text-sm leading-6 text-gray-800">{safeText(shot.dialogue || shot.lyric_text)}</div>
+                          </div>
+                        </div>
+                        {(shot.start_frame_description || shot.middle_frame_description || shot.end_frame_description) ? (
+                          <div className="mt-3 grid grid-cols-3 gap-3">
+                            <div className="rounded-xl border border-gray-100 bg-white p-3 text-xs text-gray-600"><span className="font-semibold text-gray-900">起始帧：</span>{safeText(shot.start_frame_description)}</div>
+                            <div className="rounded-xl border border-gray-100 bg-white p-3 text-xs text-gray-600"><span className="font-semibold text-gray-900">中间帧：</span>{safeText(shot.middle_frame_description)}</div>
+                            <div className="rounded-xl border border-gray-100 bg-white p-3 text-xs text-gray-600"><span className="font-semibold text-gray-900">结束帧：</span>{safeText(shot.end_frame_description)}</div>
+                          </div>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+                  <div className="mt-4 space-y-3">
+                    <textarea
+                      value={creativePackageFeedback}
+                      onChange={(event) => setCreativePackageFeedback(event.target.value)}
+                      rows={3}
+                      maxLength={4000}
+                      placeholder="如果不满意，请写下希望调整的方向，例如：剧情更直接、口播更少、产品卖点更前置、节奏更紧凑。"
+                      className="w-full resize-none rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm leading-6 text-gray-800 outline-none transition focus:border-violet-300 focus:ring-4 focus:ring-violet-100"
+                    />
+                    <div className="flex justify-end gap-3">
+                    <button
+                      onClick={() => void handleRegenerateCreativePackage()}
+                      disabled={Boolean(actionLoading) || !workspace.spec}
+                      className="inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-5 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      <RefreshCw className={`h-4 w-4 ${actionLoading === 'regenerate-creative-package' ? 'animate-spin' : ''}`} /> 重新生成
+                    </button>
+                    <button
+                      onClick={() => void handleConfirmCreativePackage()}
+                      disabled={Boolean(actionLoading) || !creativePackageDecision}
+                      className="inline-flex items-center gap-2 rounded-xl bg-violet-600 px-5 py-2.5 text-sm font-medium text-white shadow-lg shadow-violet-200 hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {actionLoading === 'generate-storyboard' ? '故事大图生成中...' : step2PrimaryLabel} <ArrowRight className="h-4 w-4" />
+                    </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </>
+          ) : null}
+
+          {activeStep === 3 ? (
+            <>
+              <StepBadge step="3" title={isTalkingHeadProject ? '故事大图 / Production Board' : '关键帧画面'} />
+              {!workspace.storyboardGrids.length && !isStoryboardFailed ? renderLoadingState('故事大图生成中', '前端正在等待后端返回 Production Board。生成完成后会在这里展示大图与 Segment 读取说明。') : (
+                <div className="flex min-h-0 flex-1 flex-col">
+                  <div className="mb-4 grid gap-3">
+                    <div className="flex items-center justify-between gap-3">
+                    <div className="text-sm text-gray-600">
+                      {isTalkingHeadProject
+                        ? `一张 21:9 故事大图 · ${storyOverviewSegments.length || scriptShots.length || 0} 个 Segment`
+                        : `镜头 ${(activeShot?.shot_index ?? activeNarrativeShot?.shot_index ?? selectedShotIndex) + 1}`}
+                    </div>
+                    <button
+                      onClick={() => void handleRegenerateKeyframes()}
+                      disabled={Boolean(actionLoading) || (!workspace.storyboardGrids.length && !isStoryboardFailed)}
+                      className="inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      <RefreshCw className={`h-4 w-4 ${actionLoading === 'regenerate-storyboard' ? 'animate-spin' : ''}`} /> 重新生成
+                    </button>
+                    </div>
+                    <textarea
+                      value={storyboardFeedback}
+                      onChange={(event) => setStoryboardFeedback(event.target.value)}
+                      rows={3}
+                      maxLength={4000}
+                      placeholder="如果不满意，请写下希望调整的画面反馈，例如：人物更像参考图、构图更干净、产品更突出、整体少一些杂乱元素。"
+                      className="w-full resize-none rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm leading-6 text-gray-800 outline-none transition focus:border-violet-300 focus:ring-4 focus:ring-violet-100"
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => storyOverviewUrl && setImagePreview({ title: 'Story Overview Board', url: storyOverviewUrl, description: selectedSegment?.reading_instruction || '口播故事大图' })}
+                    disabled={!storyOverviewUrl}
+                    className="relative min-h-0 flex-1 overflow-hidden rounded-2xl bg-gray-100 text-left disabled:cursor-default"
+                  >
+                    {storyOverviewUrl ? (
+                      <img src={storyOverviewUrl} className="h-full w-full object-contain bg-black" alt="Story Overview Board" />
+                    ) : (
+                      <div className="flex h-full items-center justify-center text-sm text-gray-400">等待故事大图</div>
+                    )}
+                    {storyOverviewSegments.length ? (
+                      <div className="absolute bottom-3 left-3 right-3 rounded-xl bg-white/90 px-4 py-3 text-sm text-gray-700 shadow-sm">
+                        {storyOverviewSegments.length} 个 Segment 已写入同一张 Production Board，视频阶段逐段读取对应区域。
+                      </div>
+                    ) : null}
+                  </button>
+                  <div className="mt-4 flex justify-end">
+                    <button
+                      onClick={() => setActiveStep(4)}
+                      disabled={!workspace.storyboardGrids.length}
+                      className="inline-flex items-center gap-2 rounded-xl bg-violet-600 px-5 py-2.5 text-sm font-medium text-white shadow-lg shadow-violet-200 hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      确认故事大图 <ArrowRight className="h-4 w-4" />
+                    </button>
+                  </div>
+                </div>
+              )}
+            </>
+          ) : null}
+
+          {activeStep === 4 ? (
+            <>
+              <StepBadge step="4" title="确认进入视频生成" />
+              <div className="grid min-h-0 flex-1 grid-cols-[1fr_360px] gap-5 overflow-hidden">
+                <div className="relative overflow-hidden rounded-2xl bg-gray-100">
+                  {storyOverviewUrl ? (
+                    <img src={storyOverviewUrl} className="h-full w-full object-contain bg-black" alt="Story Overview Board" />
+                  ) : renderLoadingState('等待故事大图', '需要先完成故事大图后才能确认进入视频生成。')}
+                </div>
+                <div className="flex flex-col rounded-2xl border border-gray-100 bg-gray-50 p-5">
+                  <h4 className="text-lg font-bold text-gray-900">生成前确认</h4>
+                  <p className="mt-2 text-sm leading-6 text-gray-600">
+                    当前故事大图会作为所有 15 秒 Segment 的统一视觉参考。确认后，系统会开始生成每个视频片段，这是高成本阶段。
+                  </p>
+                  <div className="mt-5 space-y-3 text-sm text-gray-600">
+                    <div className="rounded-xl bg-white p-3">Segment 数：{storyOverviewSegments.length || scriptShots.length || 0}</div>
+                    <div className="rounded-xl bg-white p-3">目标时长：{form.duration}秒</div>
+                    <div className="rounded-xl bg-white p-3">最终比例：{workspace.spec?.output_config?.aspect_ratio || FIXED_ASPECT_RATIO}</div>
+                  </div>
+                  <button
+                    onClick={() => void handleStep3Primary()}
+                    disabled={Boolean(actionLoading) || !workspace.storyboardGrids.length || isClipStageActive}
+                    className="mt-auto inline-flex items-center justify-center gap-2 rounded-xl bg-violet-600 px-5 py-3 text-sm font-medium text-white shadow-lg shadow-violet-200 hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {actionLoading === 'generate-clips' ? '视频生成启动中...' : step3PrimaryLabel} <ArrowRight className="h-4 w-4" />
+                  </button>
+                </div>
+              </div>
+            </>
+          ) : null}
+
+          {activeStep === 5 ? (
+            <>
+              <StepBadge step="5" title={allClipsReady ? '视频片段已生成' : '视频生成中'} />
+              <div className="grid min-h-0 flex-1 grid-cols-[1fr_360px] gap-5 overflow-hidden">
+                <div className="flex min-h-0 flex-col">
+                  <div className="relative min-h-0 flex-1 overflow-hidden rounded-2xl border border-gray-200 bg-black">
+                    {previewMedia && previewIsVideo ? (
+                      <video ref={videoRef} src={previewMedia} className="absolute inset-0 h-full w-full bg-black object-contain" controls playsInline onEnded={handlePreviewEnded} onError={handlePreviewError} />
+                    ) : (
+                      <div className="flex h-full flex-col items-center justify-center text-sm text-gray-300">
+                        {workspace.clips.length ? '选择右侧片段播放' : '视频片段生成中'}
+                      </div>
+                    )}
+                  </div>
+                  <div className="mt-4">
+                    <div className="mb-1.5 flex justify-between text-sm font-bold text-gray-900">
+                      <span>总体进度</span>
+                      <span>{clipProgress}%</span>
+                    </div>
+                    <div className="h-2 w-full overflow-hidden rounded-full bg-gray-100">
+                      <div className="h-full rounded-full bg-violet-600" style={{ width: `${clipProgress}%` }} />
+                    </div>
+                    <div className="mt-1.5 text-xs text-gray-500">预计剩余时间：{estimatedRemaining}</div>
+                  </div>
+                </div>
+                <div className="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-gray-100 bg-gray-50 p-4">
+                  <h4 className="mb-3 text-sm font-bold text-gray-900">片段列表</h4>
+                  <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
+                    {sortedShots.map((shot, index) => {
+                      const clip = workspace.clips.find((item) => item.shot_id === shot.id);
+                      const shotCells = shotCellsByShotId.get(shot.id) ?? [];
+                      const thumb = isTalkingHeadProject ? storyOverviewUrl : shotCells[0]?.asset_url;
+                      const isFailed = shot.status === 'failed' && !clip;
+                      return (
+                        <div key={shot.id} className={`rounded-xl border p-3 ${shot.id === activeShot?.id ? 'border-violet-200 bg-violet-50' : 'border-gray-100 bg-white'}`}>
+                          <div className="flex items-center gap-3">
+                            <div className="h-12 w-12 shrink-0 overflow-hidden rounded-lg bg-gray-100">
+                              {thumb ? <img src={thumb} className={`h-full w-full object-cover ${clip ? '' : 'opacity-50 grayscale'}`} alt="" /> : null}
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <div className="truncate text-sm font-medium text-gray-900">{isTalkingHeadProject ? `Shot ${shot.shot_index + 1} · Segment ${shot.shot_index + 1}` : `镜头 ${shot.shot_index + 1}`}</div>
+                              <div className="text-xs text-gray-400">{formatTimeRange(shot)} · {clip ? '已生成' : isFailed ? '生成失败' : '等待生成'}</div>
+                            </div>
+                            {clip ? (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setSelectedShotIndex(index);
+                                  setPlayMode('selected');
+                                  setShouldAutoPlay(true);
+                                }}
+                                className="inline-flex items-center gap-1 rounded-lg border border-emerald-100 bg-white px-3 py-2 text-xs font-medium text-emerald-600 hover:bg-emerald-50"
+                              >
+                                <Play className="h-3 w-3" /> 播放
+                              </button>
+                            ) : isFailed ? (
+                              <button onClick={() => void handleRegenerateShot(shot.id)} disabled={Boolean(actionLoading)} className="inline-flex items-center gap-1 rounded-lg border border-red-200 bg-white px-3 py-2 text-xs font-medium text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60">
+                                <RefreshCw className="h-3 w-3" /> 重试
+                              </button>
+                            ) : null}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <button
+                    onClick={() => setActiveStep(6)}
+                    disabled={!workspace.clips.length}
+                    className="mt-4 inline-flex items-center justify-center gap-2 rounded-xl bg-violet-600 px-5 py-3 text-sm font-medium text-white shadow-lg shadow-violet-200 hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    进入拼接与导出 <ArrowRight className="h-4 w-4" />
+                  </button>
+                </div>
+              </div>
+            </>
+          ) : null}
+
+          {activeStep === 6 ? (
+            <>
+              <StepBadge step="6" title="拼接与导出" />
+              <div className="grid min-h-0 flex-1 grid-cols-[1fr_260px] gap-5 overflow-hidden">
+                <div className="relative min-h-0 overflow-hidden rounded-2xl border border-gray-200 bg-black">
+                  {previewMedia ? (
+                    previewIsVideo ? (
+                      <video ref={videoRef} src={previewMedia} className="absolute inset-0 h-full w-full bg-black object-contain" controls playsInline onEnded={handlePreviewEnded} onError={handlePreviewError} />
+                    ) : (
+                      <img src={previewMedia} className="absolute inset-0 h-full w-full object-contain" alt="Preview" />
+                    )
+                  ) : (
+                    <div className="flex h-full items-center justify-center text-sm text-gray-300">等待拼接或导出结果</div>
+                  )}
+                </div>
+                <div className="flex min-h-0 flex-col overflow-y-auto rounded-2xl border border-gray-100 bg-gray-50 p-4">
+                  <h4 className="mb-3 text-sm font-bold text-gray-900">视频信息</h4>
+                  <div className="mb-4 space-y-2 border-b border-gray-200 pb-4 text-sm text-gray-600">
+                    <div>预览：{activeClip?.storage_uri ? selectedShotLabel : workspace.latestExport ? '最终导出' : workspace.timeline ? '拼接时间线' : '片段'}</div>
+                    <div>时长：{formatDurationLabel(workspace.timeline?.total_duration_ms || activeClip?.duration_ms || 30000)}</div>
+                    <div>分辨率：{ratioToResolution(workspace.spec?.output_config?.aspect_ratio, workspace.spec?.output_config?.video_resolution || workspace.latestExport?.resolution)}</div>
+                    <div>最终比例：{workspace.spec?.output_config?.aspect_ratio || '--'}</div>
+                    {isTalkingHeadProject ? <div>故事大图：{workspace.spec?.output_config?.story_board_aspect_ratio || '21:9'}</div> : null}
+                    <div>生成时间：{new Date(workspace.latestExport?.created_at || workspace.project.updated_at).toLocaleString()}</div>
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    <button onClick={handlePlaySelectedShot} disabled={!activeClip?.storage_uri || !previewIsVideo} className="inline-flex items-center justify-center gap-2 rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60">
+                      <Play className="h-4 w-4" /> 播放当前片段
+                    </button>
+                    <button onClick={handlePlaySequence} disabled={!playableShots.length} className="inline-flex items-center justify-center gap-2 rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60">
+                      <Video className="h-4 w-4" /> 顺序播放全部片段
+                    </button>
+                    <button onClick={() => void handleExportPrimary()} disabled={Boolean(actionLoading) || isStep6Locked} className="inline-flex items-center justify-center gap-2 rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-medium text-white shadow-md shadow-violet-200 hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-60">
+                      <Download className="h-4 w-4" /> {step6ButtonLabel}
+                    </button>
+                    <button
+                      onClick={() => {
+                        const shareUrl = workspace.latestExport?.storage_uri || workspace.timeline?.preview_uri || activeClip?.storage_uri;
+                        if (shareUrl) navigator.clipboard.writeText(shareUrl).catch(() => undefined);
+                      }}
+                      className="inline-flex items-center justify-center gap-2 rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                    >
+                      <Share className="h-4 w-4" /> 分享视频
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </>
+          ) : null}
+        </Card>
+      </div>
+
+      {/* legacy multi-card workspace layout removed
       <div className="flex-1 w-full flex flex-col gap-2 mt-10 overflow-hidden">
         {error ? (
           <div className="rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-600">
@@ -981,6 +1895,55 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
                     />
                     需要真人主体入镜
                   </label>
+                  <div className="col-span-3 rounded-xl border border-gray-200 bg-white p-3">
+                    <div className="mb-2 flex items-center justify-between gap-2">
+                      <div>
+                        <div className="text-xs font-semibold text-gray-900">产品图</div>
+                        <div className="text-[10px] text-gray-400">最多 3 张，上传后会作为产品参考传入图片和视频提示词</div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => productInputRef.current?.click()}
+                        disabled={uploadingProducts || form.productReferenceAssetIds.length >= 3}
+                        className="inline-flex items-center gap-1 rounded-lg border border-violet-100 bg-violet-50 px-2.5 py-1.5 text-[11px] font-medium text-violet-700 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        <ImagePlus className="h-3.5 w-3.5" />
+                        {uploadingProducts ? '上传中' : '上传'}
+                      </button>
+                      <input
+                        ref={productInputRef}
+                        type="file"
+                        accept="image/*"
+                        multiple
+                        className="hidden"
+                        onChange={handleProductUpload}
+                      />
+                    </div>
+                    {productAssets.length ? (
+                      <div className="grid grid-cols-3 gap-2">
+                        {productAssets.map((asset, index) => (
+                          <div key={asset.id} className="group relative aspect-square overflow-hidden rounded-lg border border-gray-100 bg-gray-50">
+                            <img src={asset.storage_uri} alt={`产品图 ${index + 1}`} className="h-full w-full object-cover" />
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveProductAsset(asset.id)}
+                              className="absolute right-1 top-1 rounded-md bg-white/90 px-1.5 py-0.5 text-[10px] font-medium text-gray-600 opacity-0 shadow-sm transition group-hover:opacity-100"
+                            >
+                              移除
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    ) : form.productReferenceAssetIds.length ? (
+                      <div className="rounded-lg bg-gray-50 px-2 py-1.5 text-[11px] text-gray-500">
+                        已关联 {form.productReferenceAssetIds.length} 张产品图
+                      </div>
+                    ) : (
+                      <div className="rounded-lg border border-dashed border-gray-200 bg-gray-50 px-3 py-4 text-center text-[11px] text-gray-400">
+                        可选上传；上传后创作、故事大图、视频提示词都会明确引用产品图。
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
 
@@ -1490,10 +2453,10 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
                     </button>
                     <button
                       onClick={() => void handleExportPrimary()}
-                      disabled={Boolean(actionLoading)}
+                      disabled={Boolean(actionLoading) || isStep6Locked}
                       className="w-full bg-violet-600 hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-60 text-white rounded-lg py-2 text-xs font-medium transition-colors shadow-md shadow-violet-200 flex items-center justify-center gap-1.5"
                     >
-                      <Download className="w-3 h-3" /> {actionLoading === 'compose-timeline' || actionLoading === 'trigger-export' ? '处理中...' : primaryStep6Label}
+                      <Download className="w-3 h-3" /> {step6ButtonLabel}
                     </button>
                     <button
                       onClick={() => {
@@ -1511,14 +2474,15 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
           </div>
         </div>
       </div>
+      */}
 
       {imagePreview ? (
         <div
-          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 p-6"
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 p-2 md:p-4"
           onClick={() => setImagePreview(null)}
         >
           <div
-            className="max-h-full w-full max-w-5xl overflow-hidden rounded-2xl bg-white shadow-2xl"
+            className="flex h-[92vh] w-[96vw] max-w-[1800px] flex-col overflow-hidden rounded-2xl bg-white shadow-2xl"
             onClick={(event) => event.stopPropagation()}
           >
             <div className="flex items-center justify-between border-b border-gray-100 px-4 py-3">
@@ -1531,12 +2495,12 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
               <button
                 onClick={() => setImagePreview(null)}
                 className="rounded-full border border-gray-200 px-3 py-1 text-xs text-gray-600 hover:bg-gray-50"
-              >
-                关闭
-              </button>
-            </div>
-            <div className="flex max-h-[78vh] items-center justify-center bg-gray-950 p-3">
-              <img src={imagePreview.url} alt={imagePreview.title} className="max-h-[74vh] max-w-full object-contain" />
+                >
+                  关闭
+                </button>
+              </div>
+            <div className="flex flex-1 min-h-0 items-center justify-center bg-gray-950 p-2 md:p-4">
+              <img src={imagePreview.url} alt={imagePreview.title} className="h-full max-h-full w-full max-w-full object-contain" />
             </div>
           </div>
         </div>

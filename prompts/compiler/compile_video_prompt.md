@@ -142,6 +142,8 @@ melancholic, intimate, dreamy, intense, explosive, euphoric, restrained, contemp
 
 1. **技术参数前置**：开头写清 `时长 / 画幅 / 清晰度 / 生成模式 / 三图融合`，这些值来自输出规格硬约束和 shot_spec。
 2. **素材引用**：明确写出 `图片1`、`图片2`、`图片3` 分别作为起始、中间、结尾参考，不得改成其他素材名。
+   - 如果参考素材状态中包含产品参考图，必须继续显式写出 `图片4` / `图片5` / `图片6` 是用户上传产品图，说明它们是本次要介绍/展示的真实产品外观参考。
+   - 产品图要和当前创意、剧本、配音语义结合，用于产品外观、瓶身/包装、桌面摆放、产品 close-up 或产品旋转展示；不能把产品图当成人物、场景或普通装饰图。
 3. **时间戳段落**：按当前 `duration_sec` 拆成 3 个连续时间段，分别对应图片1→图片2→图片3 的运动发展；如果 duration_sec 不是 15 秒，也要按比例拆分。
 4. **镜头语言**：每段至少包含一种具体 camera term，例如 push-in、pull-back、tracking shot、dolly-in、pan、tilt、crane、handheld、rack focus、shallow depth of field、parallax。
 5. **转场连续性**：三段之间只能是同一个连续镜头内部的运动过渡，不写 cut、montage、hard transition、scene change。

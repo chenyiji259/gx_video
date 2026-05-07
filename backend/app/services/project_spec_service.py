@@ -65,6 +65,30 @@ def _spec_to_dict(spec: ProjectSpecVersion) -> dict:
     }
 
 
+def normalize_product_reference_asset_ids(value: object) -> list[str]:
+    """规范化产品参考图 asset_id 列表，最多 3 张。"""
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ProjectSpecError(
+            "product_reference_asset_ids 必须是 asset_id 字符串列表",
+            code="validation_error",
+        )
+    result: list[str] = []
+    for item in value:
+        text = str(item or "").strip()
+        if not text:
+            continue
+        if text not in result:
+            result.append(text)
+        if len(result) > 3:
+            raise ProjectSpecError(
+                "产品图最多只能上传 3 张",
+                code="too_many_product_images",
+            )
+    return result
+
+
 class ProjectSpecService:
     """项目输入规格版本服务。"""
 

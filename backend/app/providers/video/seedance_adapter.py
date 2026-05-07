@@ -35,14 +35,14 @@ from app.providers.video.base import VideoGenerationError, VideoGenerationMode, 
 
 _logger = get_logger("seedance_adapter", layer="tool")
 
-_MODEL_NAMES: dict[str, str] = {
-    "seedance_2":      "doubao-seedance-2-0-260128",
-    "seedance_2_fast": "doubao-seedance-2-0-fast-260128",
-}
-
 # REST 路径（基于火山方舟 SDK 资源命名推测，生产前需验证）
 _SUBMIT_PATH = "/contents/generations/tasks"
 _QUERY_PATH = "/contents/generations/tasks/{task_id}"
+_SEEDANCE_VIDEO_RESOLUTION = "480p"
+_LEGACY_MODEL_NAMES: dict[str, str] = {
+    "seedance_2": "doubao-seedance-2-0-260128",
+    "seedance_2_fast": "doubao-seedance-2-0-fast-260128",
+}
 
 
 class SeedanceAdapter:
@@ -61,20 +61,19 @@ class SeedanceAdapter:
                 ],
                 "duration": 8,
                 "ratio": "9:16",
-                "resolution": "1080p",
+                "resolution": "480p",
             },
         )
     """
 
     def __init__(self, provider_name: str = "seedance_2") -> None:
-        if provider_name not in _MODEL_NAMES:
+        if provider_name not in _LEGACY_MODEL_NAMES:
             raise VideoGenerationError(
                 f"SeedanceAdapter 不支持 provider: {provider_name!r}, "
-                f"可用值: {list(_MODEL_NAMES.keys())}",
+                f"可用值: {list(_LEGACY_MODEL_NAMES.keys())}",
                 code="unsupported_provider",
             )
         self._provider_name = provider_name
-        self._model_name = _MODEL_NAMES[provider_name]
 
         cfg = get_config()
         ark_cfg = cfg.external_apis.ark
@@ -88,10 +87,12 @@ class SeedanceAdapter:
         try:
             self._profile = registry.get("video", provider_name)
             self._default_params: dict[str, Any] = dict(self._profile.default_params)
+            self._model_name = self._profile.model_name or _LEGACY_MODEL_NAMES[provider_name]
         except (KeyError, AttributeError):
             self._profile = None
+            self._model_name = _LEGACY_MODEL_NAMES[provider_name]
             self._default_params = {
-                "duration": 8, "ratio": "9:16", "resolution": "1080p",
+                "duration": 8, "ratio": "9:16", "resolution": _SEEDANCE_VIDEO_RESOLUTION,
             }
 
     # ------------------------------------------------------------------
@@ -157,8 +158,9 @@ class SeedanceAdapter:
                 code="missing_reference_images",
             )
 
+        compiled_prompt = self._merge_negative_prompt(prompt, negative_prompt)
         payload = self._build_payload(
-            prompt=prompt,
+            prompt=compiled_prompt,
             mode=mode,
             first_frame_url=reference_image_url,
             last_frame_url=last_frame_url,
@@ -173,8 +175,35 @@ class SeedanceAdapter:
             f"multi_ref_count={len(reference_image_urls)} "
             f"audio_ref_count={len(reference_audio_urls)} "
             f"legacy_first_last={bool(reference_image_url or last_frame_url)} "
-            f"prompt_len={len(prompt)}",
+            f"prompt_len={len(compiled_prompt)}",
             event_type="seedance_submit",
+        )
+        content_roles = [
+            item.get("role")
+            for item in payload["content"]
+            if item.get("role")
+        ]
+        _logger.info(
+            f"Seedance 2.0 请求参数: model={payload['model']!r} mode={mode!r} "
+            f"ratio={payload['ratio']!r} duration={payload['duration']} "
+            f"resolution={payload['resolution']!r} "
+            f"generate_audio={payload['generate_audio']} watermark={payload['watermark']} "
+            f"content_count={len(payload['content'])} "
+            f"image_count={sum(1 for item in payload['content'] if item.get('type') == 'image_url')} "
+            f"audio_count={sum(1 for item in payload['content'] if item.get('type') == 'audio_url')} "
+            f"content_roles={content_roles!r}",
+            event_type="seedance_request_payload",
+            model=payload["model"],
+            mode=mode,
+            ratio=payload["ratio"],
+            duration=payload["duration"],
+            resolution=payload["resolution"],
+            generate_audio=payload["generate_audio"],
+            watermark=payload["watermark"],
+            content_count=len(payload["content"]),
+            image_count=sum(1 for item in payload["content"] if item.get("type") == "image_url"),
+            audio_count=sum(1 for item in payload["content"] if item.get("type") == "audio_url"),
+            content_roles=content_roles,
         )
 
         task_id = await self._submit_task(payload)
@@ -183,6 +212,20 @@ class SeedanceAdapter:
     # ------------------------------------------------------------------
     # 内部：构建请求体
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _merge_negative_prompt(prompt: str, negative_prompt: Optional[str]) -> str:
+        """Seedance 没有独立负向字段，将负向约束并入文本 prompt。"""
+        text = str(prompt or "").strip()
+        negative = str(negative_prompt or "").strip()
+        if not negative:
+            return text
+        if "负向约束" in text and negative in text:
+            return text
+        return (
+            f"{text}\n\n"
+            f"负向约束：不要生成以下内容：{negative}。"
+        ).strip()
 
     def _build_payload(
         self,
@@ -234,7 +277,7 @@ class SeedanceAdapter:
             "content": content,
             "ratio": merged.get("ratio", "9:16"),
             "duration": int(merged.get("duration", 8)),
-            "resolution": merged.get("resolution", "1080p"),
+            "resolution": _SEEDANCE_VIDEO_RESOLUTION,
             "generate_audio": bool(merged.get("generate_audio", False)),
             "watermark": bool(merged.get("watermark", False)),
         }

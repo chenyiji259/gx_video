@@ -19,10 +19,11 @@ talking_head:
   # Story Overview Board 生图阶段使用：本地人物图会上传为公网/签名 URL 传给图片模型。
   # Seedance 视频阶段仍使用 host_reference_image_assets 的 asset:// 资产。
   story_board_reference_image_dir: "data/person_pic"
+  story_board_scene_image_path: "data/person_pic/host_reference_01.png"
   host_reference_image_assets:
-    - "asset://asset-20260506200636-lmt8b"
     - "asset://asset-20260506200638-6g86k"
-    - "asset://asset-20260506200638-5pf4j"
+    - "asset://asset-20260506200638-6g86k"
+    - "asset://asset-20260506200638-6g86k"
 
   reference_audio_assets:
     - "asset://asset-20260506202002-hhmgk"

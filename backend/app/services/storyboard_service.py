@@ -23,6 +23,7 @@ from typing import Any
 from app.core.config import get_config
 from app.core.logging import get_project_logger
 from app.domain.states import ProjectStage
+from app.models.prompt_bundle import PromptBundleModel
 from app.models.storyboard import StoryboardFrame, StoryboardVersion
 from app.providers.image.base import ImageGenerationError
 from app.repositories.asset_repository import AssetRepository
@@ -48,6 +49,7 @@ from app.services.output_spec_service import (
     TALKING_HEAD_STORY_BOARD_IMAGE_RESOLUTION,
 )
 from app.services.prompt_compiler_service import PromptCompilerService
+from app.services.regeneration_context_service import regeneration_context_service
 from app.services.shot_plan_persistence_service import ShotPlanPersistenceService
 from app.services.state_transition_service import state_transition_service
 from app.services.talking_head_prompt_service import TalkingHeadPromptService, segment_time_range
@@ -186,6 +188,15 @@ class StoryboardService:
                     f"({ext.total_shots_generated})",
                     code="insufficient_narrative_shots",
                 )
+            current_storyboard = await StoryboardVersionRepository(session).get_active(
+                project_id
+            )
+            current_storyboard_payload = (
+                current_storyboard.raw_payload if current_storyboard is not None else None
+            )
+            current_storyboard_version_id = (
+                current_storyboard.id if current_storyboard is not None else None
+            )
 
         # ---- 步骤 2: 确保 shot_plan 存在（自动派生）---------------------
         async with UnitOfWork() as uow:
@@ -217,6 +228,22 @@ class StoryboardService:
             f"total_shots={total_shots}",
             event_type="storyboard_generation_start",
         )
+        previous_prompt = await self._latest_storyboard_prompt(
+            project_id=project_id,
+            storyboard_version_id=current_storyboard_version_id,
+        )
+        feedback = await regeneration_context_service.get_latest_feedback(
+            project_id,
+            decision_type="confirm_storyboard",
+            target_entity_id=current_storyboard_version_id,
+        )
+        regeneration_prompt_section = (
+            regeneration_context_service.build_storyboard_prompt_section(
+                feedback=feedback,
+                current_storyboard_payload=current_storyboard_payload,
+                previous_prompt=previous_prompt,
+            )
+        )
 
         # ---- 步骤 4: 创建 StoryboardVersion 主记录 ---------------------
         async with UnitOfWork() as uow:
@@ -231,6 +258,7 @@ class StoryboardService:
                     "grid_count": grid_count,
                     "total_shots": total_shots,
                     "grids": [],
+                    "regeneration_feedback": feedback,
                 },
                 is_active=True,
             )
@@ -253,6 +281,7 @@ class StoryboardService:
                 storyboard_version_id=sb_version_id,
                 logger=logger,
                 grids_meta=all_grids_meta,
+                regeneration_prompt_section=regeneration_prompt_section,
             )
 
             # 增量写回 raw_payload，保证前端在 shot_plan_ready 阶段即可读到
@@ -266,6 +295,7 @@ class StoryboardService:
                         "grid_count": grid_count,
                         "total_shots": total_shots,
                         "grids": all_grids_meta,
+                        "regeneration_feedback": feedback,
                     }
                     uow.session.add(sv)
 
@@ -281,6 +311,7 @@ class StoryboardService:
                 "grid_count": grid_count,
                 "total_shots": total_shots,
                 "grids": all_grids_meta,
+                "regeneration_feedback": feedback,
             }
             uow.session.add(sv)
 
@@ -348,6 +379,15 @@ class StoryboardService:
         """口播链路：生成 1 张 Story Overview Board，不切三宫格 cell。"""
         async with UnitOfWork() as uow:
             shot_plan = await ShotPlanRepository(uow.session).get_active(project_id)
+            current_storyboard = await StoryboardVersionRepository(uow.session).get_active(
+                project_id
+            )
+            current_storyboard_payload = (
+                current_storyboard.raw_payload if current_storyboard is not None else None
+            )
+            current_storyboard_version_id = (
+                current_storyboard.id if current_storyboard is not None else None
+            )
 
         if shot_plan is None:
             logger.info(
@@ -371,6 +411,22 @@ class StoryboardService:
             f"口播 Story Overview Board 生成开始: segment_count={segment_count}",
             event_type="storyboard_story_overview_start",
         )
+        previous_prompt = await self._latest_storyboard_prompt(
+            project_id=project_id,
+            storyboard_version_id=current_storyboard_version_id,
+        )
+        feedback = await regeneration_context_service.get_latest_feedback(
+            project_id,
+            decision_type="confirm_storyboard",
+            target_entity_id=current_storyboard_version_id,
+        )
+        regeneration_prompt_section = (
+            regeneration_context_service.build_storyboard_prompt_section(
+                feedback=feedback,
+                current_storyboard_payload=current_storyboard_payload,
+                previous_prompt=previous_prompt,
+            )
+        )
 
         async with UnitOfWork() as uow:
             sv_repo = StoryboardVersionRepository(uow.session)
@@ -388,6 +444,7 @@ class StoryboardService:
                     "story_board_aspect_ratio": "21:9",
                     "story_board_image_resolution": TALKING_HEAD_STORY_BOARD_IMAGE_RESOLUTION,
                     "grids": [],
+                    "regeneration_feedback": feedback,
                 },
                 is_active=True,
             )
@@ -403,6 +460,7 @@ class StoryboardService:
                 project_id,
                 host_reference_assets=cfg.host_reference_image_assets,
                 reference_audio_assets=cfg.reference_audio_assets,
+                regeneration_prompt_section=regeneration_prompt_section,
             )
             await event_log_service.emit(
                 uow.session,
@@ -517,6 +575,7 @@ class StoryboardService:
                 "layout_reading_map": layout_reading_map,
                 "segments": segments,
                 "grids": [grid_meta],
+                "regeneration_feedback": feedback,
             }
             uow.session.add(sv)
 
@@ -589,6 +648,41 @@ class StoryboardService:
         )
         return storyboard_version
 
+    async def _latest_storyboard_prompt(
+        self,
+        *,
+        project_id: str,
+        storyboard_version_id: str | None,
+    ) -> str:
+        if not storyboard_version_id:
+            return ""
+        async with UnitOfWork() as uow:
+            frames = await StoryboardFrameRepository(uow.session).list_by_version(
+                storyboard_version_id,
+                limit=20,
+            )
+            prompt_ids = [
+                frame.prompt_bundle_id
+                for frame in frames
+                if getattr(frame, "prompt_bundle_id", None)
+            ]
+            if prompt_ids:
+                bundle = await uow.session.get(PromptBundleModel, prompt_ids[0])
+                if bundle is not None and bundle.project_id == project_id:
+                    return bundle.positive_prompt or ""
+            sv = await StoryboardVersionRepository(uow.session).get_by_id_for_project(
+                storyboard_version_id,
+                project_id,
+            )
+            raw = sv.raw_payload if sv is not None else {}
+        grids = list((raw or {}).get("grids") or [])
+        prompts = [
+            str(grid.get("prompt_preview") or "").strip()
+            for grid in grids
+            if isinstance(grid, dict) and grid.get("prompt_preview")
+        ]
+        return "\n\n".join(prompts[:3])
+
     # ------------------------------------------------------------------
     # 单张三宫格处理（doc 21 §6 增量推送）
     # ------------------------------------------------------------------
@@ -605,6 +699,7 @@ class StoryboardService:
         storyboard_version_id: str,
         logger: Any,
         grids_meta: list[dict],
+        regeneration_prompt_section: str = "",
     ) -> None:
         """处理单张三宫格：编译 prompt → 生成大图 → 切分 → 落 StoryboardFrame。"""
 
@@ -645,6 +740,7 @@ class StoryboardService:
                 grid_index=grid_index,
                 total_grids=total_grids,
                 shot_descriptions=shot_descriptions,
+                regeneration_prompt_section=regeneration_prompt_section,
             )
             await event_log_service.emit(
                 uow.session,

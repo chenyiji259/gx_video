@@ -450,6 +450,55 @@ def _resolve_nine_grid_output_spec(aspect_ratio: str) -> dict[str, Any]:
     return resolve_triptych_image_spec(aspect_ratio)
 
 
+def _product_reference_asset_ids(spec: Any | None) -> list[str]:
+    """从 ProjectSpec.output_config 读取产品参考图 asset_id，最多 3 张。"""
+    output_config = getattr(spec, "output_config", None) or {}
+    raw_ids = output_config.get("product_reference_asset_ids") or []
+    if not isinstance(raw_ids, list):
+        return []
+    ids: list[str] = []
+    for item in raw_ids:
+        text = str(item or "").strip()
+        if text and text not in ids:
+            ids.append(text)
+        if len(ids) >= 3:
+            break
+    return ids
+
+
+async def _resolve_product_reference_urls(
+    session: AsyncSession,
+    project_id: str,
+    spec: Any | None,
+) -> list[dict[str, str]]:
+    """解析产品图 asset_id 为签名 URL，并保留图号说明所需的 asset_id。"""
+    asset_ids = _product_reference_asset_ids(spec)
+    if not asset_ids:
+        return []
+    repo = AssetRepository(session)
+    refs: list[dict[str, str]] = []
+    for asset_id in asset_ids:
+        asset = await repo.get_by_id_for_project(asset_id, project_id)
+        url = await build_asset_access_url(asset)
+        if url:
+            refs.append({"asset_id": asset_id, "url": url})
+    return refs
+
+
+def _product_reference_text(product_refs: list[dict[str, str]], *, start_index: int = 1) -> str:
+    if not product_refs:
+        return ""
+    lines = ["产品参考图职责："]
+    for offset, ref in enumerate(product_refs):
+        image_no = start_index + offset
+        lines.append(
+            f"- 图片{image_no}是用户上传的产品图，asset_id={ref['asset_id']}，url={ref['url']}。"
+            "必须把它当作本次视频要介绍/展示的真实产品外观参考，结合创意和剧本表达产品卖点；"
+            "不要把它当作人物、场景或装饰图。"
+        )
+    return "\n".join(lines)
+
+
 # ---------------------------------------------------------------------------
 # PromptCompilerService
 # ---------------------------------------------------------------------------
@@ -505,6 +554,7 @@ class PromptCompilerService:
         brief = await brief_repo.get_active(project_id)
         style = await style_repo.get_active(project_id)
         spec = await spec_repo.get_active(project_id)
+        product_refs = await _resolve_product_reference_urls(session, project_id, spec)
 
         # doc11 批次3修复：读取参考图（场景为主帧，角色图为全面附加一致性参考）
         ref_image_url: str | None = None
@@ -600,8 +650,23 @@ class PromptCompilerService:
 
         if is_video_target and video_reference_image_urls:
             ref_image_urls = list(video_reference_image_urls)
+            ref_asset_ids.extend(ref["asset_id"] for ref in product_refs if ref["asset_id"] not in ref_asset_ids)
+            for product_ref in product_refs:
+                if len(ref_image_urls) >= 9:
+                    break
+                if product_ref["url"] not in ref_image_urls:
+                    ref_image_urls.append(product_ref["url"])
             ref_image_url = ref_image_urls[0] if ref_image_urls else None
-            ref_assets_text = f"视频参考图 {len(ref_image_urls)} 张（起始 / 中间 / 结尾）"
+            product_start_index = len(video_reference_image_urls) + 1
+            product_text = _product_reference_text(product_refs, start_index=product_start_index)
+            ref_assets_text = "\n".join(
+                part
+                for part in [
+                    f"视频参考图 {len(video_reference_image_urls)} 张（图片1 / 图片2 / 图片3 分别为起始 / 中间 / 结尾）",
+                    product_text,
+                ]
+                if part
+            )
 
         # ---- 步骤 2.5: 构建角色描述文字（供 prompt 编译 LLM 使用） -----------------
         # 从 CharacterSetVersion 提取匹配角色的名字/外貌/造型描述
@@ -859,6 +924,7 @@ class PromptCompilerService:
         total_grids: int,
         *,
         shot_descriptions: list[dict],
+        regeneration_prompt_section: str = "",
     ) -> PromptBundle:
         """编译三宫格生图 prompt。
 
@@ -901,6 +967,8 @@ class PromptCompilerService:
         # 3. 读 style（用于 style_direction 兜底）
         style_repo = StyleBibleRepository(session)
         style = await style_repo.get_active(project_id)
+        spec = await ProjectSpecRepository(session).get_active(project_id)
+        product_refs = await _resolve_product_reference_urls(session, project_id, spec)
         style_direction = brief.style_direction or (
             f"{(style.lighting_style or '')}, {(style.camera_style or '')}".strip(", ")
             if style
@@ -930,6 +998,13 @@ class PromptCompilerService:
                 else "不需要真人入镜，三宫格中不要出现真人脸、真人身体或真人手部特写，优先场景、产品、图形和抽象主体。"
             ),
         }
+        product_reference_text = _product_reference_text(product_refs, start_index=1)
+        if product_reference_text:
+            base_vars["style_direction"] = f"{style_direction}\n{product_reference_text}"
+        if regeneration_prompt_section:
+            base_vars["style_direction"] = (
+                f"{base_vars['style_direction']}\n{regeneration_prompt_section}"
+            )
         grid_spec = _resolve_nine_grid_output_spec(ext.aspect_ratio)
         base_vars.update(
             {
@@ -988,9 +1063,9 @@ class PromptCompilerService:
             provider=provider_name,
             positive_prompt=rendered_result.get("positive_prompt", ""),
             negative_prompt=rendered_result.get("negative_prompt"),
-            reference_asset_ids=[],
-            reference_image_url=None,
-            reference_image_urls=[],
+            reference_asset_ids=[ref["asset_id"] for ref in product_refs],
+            reference_image_url=product_refs[0]["url"] if product_refs else None,
+            reference_image_urls=[ref["url"] for ref in product_refs],
             reference_weight=0.75,
             params={
                 "aspect_ratio": ext.aspect_ratio,
@@ -1003,6 +1078,7 @@ class PromptCompilerService:
                 "grid_rows": 1,
                 "grid_columns": 3,
                 "storyboard_layout": "1x3_triptych",
+                "regeneration_feedback": regeneration_prompt_section or None,
             },
             source_brief_version_id=brief.id,
             source_style_version_id=style.id if style else None,
@@ -1020,8 +1096,8 @@ class PromptCompilerService:
             params=bundle.params,
             source_brief_version_id=bundle.source_brief_version_id,
             source_style_version_id=bundle.source_style_version_id,
-            reference_image_url=None,
-            reference_asset_ids=[],
+            reference_image_url=product_refs[0]["url"] if product_refs else None,
+            reference_asset_ids=[ref["asset_id"] for ref in product_refs],
         )
         bundle_repo = PromptBundleRepository(session)
         await bundle_repo.add(orm)

@@ -15,12 +15,15 @@
 from __future__ import annotations
 
 import json
+import mimetypes
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.creative_planning_agent import CreativePlanningAgent
 from app.core.logging import get_project_logger
+from app.core.config import get_config
 from app.core.provider_registry import get_provider_registry
 from app.tools.shared.artifact_tools import build_ref_from_asset_latest, read_artifact
 from app.domain.states import ProjectStage
@@ -43,6 +46,7 @@ from app.services.output_spec_service import (
 )
 from app.storage.local_artifact_store import LocalArtifactStore
 from app.storage.path_planner import ArtifactStage
+from app.storage.storage_factory import get_storage
 
 
 # ---------------------------------------------------------------------------
@@ -60,8 +64,8 @@ class BriefGenerationError(Exception):
 
 TALKING_HEAD_HOST_CHARACTER = {
     "character_id": "host_001",
-    "name": "50岁男性护肤专家",
-    "appearance": "50岁男性护肤专家",
+    "name": "光希老王",
+    "appearance": "光希老王",
     "personality": "专业、亲和、可信",
 }
 
@@ -248,6 +252,8 @@ class BriefPersistenceService:
             brief_version_no = await CreativeBriefRepository(session).get_next_version_no(project_id)
             style_version_no = await StyleBibleRepository(session).get_next_version_no(project_id)
 
+        scene_reference_url = await self._resolve_scene_reference_image_url(project_id)
+
         # ---- 步骤 2: 调用 CreativePlanningAgent.run_phase1() -------------------
         logger.info("开始生成 brief+style", event_type="brief_generation_start")
         agent = CreativePlanningAgent()
@@ -273,6 +279,8 @@ class BriefPersistenceService:
             "video_resolution": output_config.get("video_resolution", "1080p"),
             "image_resolution": output_config.get("image_resolution", "2K"),
             "image_size": output_config.get("image_size"),
+            "scene_reference_url": scene_reference_url,
+            "scene_reference_role": "固定场地/场景参考图，用于创意规划阶段锁定空间、布景、光线、桌面关系和场地氛围",
             "version_no": min(brief_version_no, style_version_no),
         })
 
@@ -325,6 +333,23 @@ class BriefPersistenceService:
             event_type="brief_generation_done",
         )
         return brief_version, style_version
+
+    async def _resolve_scene_reference_image_url(self, project_id: str) -> str | None:
+        cfg = get_config().talking_head
+        scene_path = str(getattr(cfg, "story_board_scene_image_path", "") or "").strip()
+        if not scene_path:
+            return None
+        path = Path(scene_path)
+        if not path.is_absolute():
+            path = Path(__file__).resolve().parents[3] / path
+        if not path.exists():
+            return None
+        suffix = path.suffix.lower() or ".png"
+        content_type = mimetypes.guess_type(path.name)[0] or "image/png"
+        key = f"projects/{project_id}/assets/creative_scene_reference/{path.stem}{suffix}"
+        storage = get_storage()
+        await storage.async_upload_file(key, path, content_type=content_type)
+        return storage.get_presigned_url(key, expiry_seconds=6 * 60 * 60)
 
     async def save_from_data(
         self,
