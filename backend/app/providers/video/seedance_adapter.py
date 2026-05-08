@@ -219,9 +219,7 @@ class SeedanceAdapter:
     def _append_video_output_constraints(prompt: str) -> str:
         """追加所有视频都必须遵守的输出约束。"""
         text = str(prompt or "").strip()
-        constraint = (
-            "此视频不生成字幕。最终画面必须纯净无字，任何可读文字都不允许出现。"
-        )
+        constraint = "此视频不生成字幕。最终画面必须纯净无字，任何可读文字都不允许出现。"
         if "此视频不生成字幕" in text:
             return text
         return f"{constraint}\n\n{text}" if text else constraint
