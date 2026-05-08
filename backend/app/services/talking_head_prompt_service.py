@@ -713,20 +713,8 @@ class TalkingHeadPromptService:
         *,
         fallback_references: list[str],
     ) -> list[str]:
-        cfg = get_config().talking_head
-        ref_dir = _resolve_path_from_project_root(cfg.story_board_reference_image_dir)
-        image_paths = _ordered_person_reference_paths(ref_dir) if ref_dir.exists() else []
-        if not image_paths:
-            return _clean_reference_list(fallback_references)
-
-        urls: list[str] = []
-        for path in image_paths:
-            urls.append(await _upload_local_reference_image(
-                project_id=project_id,
-                path=path,
-                asset_dir="talking_head_reference",
-            ))
-        return urls
+        # 人物参考图由 app.yaml 中的受控 asset:// 资产决定，不能被本地 r1/r2/r3 文件覆盖。
+        return _clean_reference_list(fallback_references)
 
     async def compile_talking_head_video(
         self,

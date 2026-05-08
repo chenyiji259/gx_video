@@ -437,6 +437,10 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
         decisions: decisions?.items ?? [],
       });
     } catch (err) {
+      if (isNotFoundError(err)) {
+        onNavigate('projects');
+        return;
+      }
       setError(err instanceof Error ? err.message : '加载工作台失败');
     } finally {
       setLoading(false);

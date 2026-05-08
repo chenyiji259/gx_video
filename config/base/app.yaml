@@ -22,9 +22,9 @@ talking_head:
   story_board_reference_image_dir: "data/person_pic"
   story_board_scene_image_path: "data/person_pic/d1.png"
   host_reference_image_assets:
-    - "asset://asset-20260506200638-6g86k"
-    - "asset://asset-20260506200638-6g86k"
-    - "asset://asset-20260506200638-6g86k"
+    - "asset://asset-20260506142121-6ns58"
+    - "asset://asset-20260506142121-6ns58"
+    - "asset://asset-20260506142121-6ns58"
 
   reference_audio_assets:
     - "asset://asset-20260506202002-hhmgk"

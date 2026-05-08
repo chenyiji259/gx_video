@@ -1,6 +1,8 @@
+import asyncio
 from types import SimpleNamespace
 
 from app.services.talking_head_prompt_service import (
+    TalkingHeadPromptService,
     _build_story_overview_board_prompt,
     _enforce_video_prompt_contract,
     _fallback_video_prompt,
@@ -103,6 +105,28 @@ def test_local_reference_paths_treat_r_images_as_people_and_d1_as_scene(tmp_path
     assert [path.name for path in person_paths] == ["r1.png", "r2.png", "r3.png"]
     assert scene_path is not None
     assert scene_path.name == "d1.png"
+
+
+def test_story_board_reference_urls_use_config_assets_even_when_local_files_exist(tmp_path):
+    for name in ("r1.png", "r2.png", "r3.png"):
+        (tmp_path / name).write_bytes(b"fake")
+
+    urls = asyncio.run(
+        TalkingHeadPromptService()._resolve_story_board_reference_image_urls(
+            "project-1",
+            fallback_references=[
+                "asset://host-1",
+                "asset://host-2",
+                "asset://host-3",
+            ],
+        )
+    )
+
+    assert urls == [
+        "asset://host-1",
+        "asset://host-2",
+        "asset://host-3",
+    ]
 
 
 def test_story_overview_board_prompt_numbers_products_as_5_6_7_without_urls():
