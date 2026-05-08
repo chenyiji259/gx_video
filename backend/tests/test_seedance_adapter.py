@@ -99,9 +99,9 @@ def test_seedance_payload_always_locks_resolution_to_480p():
 def test_seedance_appends_video_output_constraints_without_negative_prompt():
     merged = SeedanceAdapter._append_video_output_constraints("生成一段口播视频。")
 
+    assert merged.startswith("此视频不生成字幕。最终画面必须纯净无字")
     assert "生成一段口播视频。" in merged
-    assert "不要生成字幕、水印。" in merged
-    assert "负向约束" not in merged
+    assert "字幕、水印" not in merged
 
 
 def test_seedance_http_request_log_formats_prompt_and_redacts_auth(monkeypatch):
@@ -224,9 +224,10 @@ async def test_generate_logs_seedance_request_payload_and_submits_480p(monkeypat
 
     assert submitted_payloads[0]["resolution"] == "480p"
     text_prompt = submitted_payloads[0]["content"][0]["text"]
-    assert "不要生成字幕、水印。" in text_prompt
+    assert text_prompt.startswith("此视频不生成字幕。最终画面必须纯净无字")
+    assert "生成一段测试视频。" in text_prompt
+    assert "字幕，文字贴片" not in text_prompt
     assert "负向约束" not in text_prompt
-    assert "文字贴片" not in text_prompt
     request_logs = [
         record
         for record in fake_logger.records

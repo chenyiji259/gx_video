@@ -301,6 +301,8 @@ class NarrativeScriptService:
             if isinstance(brief_payload.get("creative_brief"), dict):
                 brief_payload = brief_payload.get("creative_brief") or {}
             extension = brief_payload.get("extension") or {}
+            scene_reference_profile = extension.get("scene_reference_profile") or {}
+            product_reference_profile = extension.get("product_reference_profile") or {}
             target_duration_sec = int(extension.get("target_duration_sec") or 60)
             allowed_shot_durations_sec = extension.get("allowed_shot_durations_sec") or (
                 get_provider_registry().list_supported_durations("video", enabled_only=True) or [4, 5, 6, 8, 10, 12, 15]
@@ -350,13 +352,19 @@ class NarrativeScriptService:
             "reference_image_count": reference_image_count,
             "target_duration_sec": target_duration_sec,
             "allowed_shot_durations_sec": allowed_shot_durations_sec,
-            "shot_count_total": shot_count_total,
-            "grid_count": grid_count,
-            "storyboard_layout": extension.get("storyboard_layout"),
-            "regeneration_feedback": feedback,
-            "regeneration_prompt_section": regeneration_prompt_section,
-            "version_no": next_version_no,
-        }
+                "shot_count_total": shot_count_total,
+                "grid_count": grid_count,
+                "storyboard_layout": extension.get("storyboard_layout"),
+                "scene_reference_url": str(scene_reference_profile.get("url") or "").strip(),
+                "scene_reference_role": str(scene_reference_profile.get("role") or "").strip(),
+                "scene_reference_observation": str(scene_reference_profile.get("observation") or "").strip(),
+                "product_reference_urls": [str(url).strip() for url in (product_reference_profile.get("urls") or []) if str(url).strip()],
+                "product_reference_role": str(product_reference_profile.get("role") or "").strip(),
+                "product_reference_observation": str(product_reference_profile.get("observation") or "").strip(),
+                "regeneration_feedback": feedback,
+                "regeneration_prompt_section": regeneration_prompt_section,
+                "version_no": next_version_no,
+            }
         artifact_ref = await self._agent.run(task_spec)
 
         # 从 ArtifactRef 读回叙事剧本内容

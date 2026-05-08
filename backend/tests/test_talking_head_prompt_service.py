@@ -41,9 +41,8 @@ def test_fallback_talking_head_video_prompt_locks_host_identity_and_clothing():
     assert "图片2、图片3只用于补充锁定同一角色" in positive
     assert "图片4是完整导演分镜图" in positive
     assert "不要复刻它的表格页面" in positive
-    assert "无字幕硬约束" in positive
-    assert "画面中绝对不要出现任何可读文字" in positive
-    assert "产品瓶身和道具只能作为不可读的视觉符号" in positive
+    assert positive.startswith("此视频不生成字幕。最终画面必须纯净无字")
+    assert "产品图必须作为本段介绍/展示的真实产品外观参考" in positive
     assert "只读取导演分镜图中第 2 行 / 15-30s" in positive
     assert rendered["reference_image_urls"][3] == "https://example.com/board.png"
     assert rendered["params"]["watermark"] is False
@@ -72,8 +71,8 @@ def test_enforce_talking_head_video_prompt_contract_repairs_llm_drift():
     assert "主角只能是光希老王" in positive
     assert "图片1是唯一服装与整体造型基准" in positive
     assert "图片4是完整导演分镜图" in positive
-    assert "无字幕硬约束" in positive
-    assert "台词只能通过人物声音、口型和表演传达" in positive
+    assert positive.startswith("此视频不生成字幕。最终画面必须纯净无字")
+    assert "内容只能通过人物声音、口型和表演传达" in positive
     assert "声音硬约束" in positive
     assert "不要背景音乐" in positive
     assert "改性别" in negative

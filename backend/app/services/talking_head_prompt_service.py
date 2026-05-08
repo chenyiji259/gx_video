@@ -46,15 +46,8 @@ FACE_OCCLUSION_RULE = (
 
 def _no_visible_text_contract() -> str:
     return (
-        "无字幕硬约束：最终视频画面必须是纯净无字画面；台词只能通过人物声音、口型和表演传达，"
-        "不得以任何可见文字形式出现在画面中。"
-        "禁止生成字幕、双语字幕、歌词、旁白字幕、下三分之一标题、解释说明、按钮文案、弹幕、CTA文字、"
-        "成分卡文字、产品卖点文字、编号、时间码、标签、贴纸文字、UI文字、提示牌、白板字、屏幕字、"
-        "海报字、瓶身可读小字、包装可读文字或任何文字贴片。"
-        "如果参考图、导演分镜图、产品图或脚本中出现文字，只能理解其语义，不得复刻字形、排版、行列、乱码或文本块。"
-        "产品瓶身和道具只能作为不可读的视觉符号，成分卡和屏幕也只能作为抽象图标，不能承载可读文字。"
-        "合格标准：任意一帧里都不能出现中文、英文、数字、乱码、假字或类似字幕的文本痕迹；"
-        "画面中绝对不要出现任何可读文字；只要出现任何文字痕迹，本次视频视为失败，需要重新生成。"
+        "此视频不生成字幕。最终画面必须纯净无字，任何可读文字都不允许出现；"
+        "内容只能通过人物声音、口型和表演传达。"
     )
 
 
@@ -610,7 +603,8 @@ def _fallback_video_prompt(
     shot_reference_url = story_board_url
     product_text = _product_reference_text(product_refs, start_index=5)
     no_visible_text_rule = _no_visible_text_contract()
-    positive = f"""
+    positive = f"""{no_visible_text_rule}
+
 生成一个 15 秒中文单人护肤科普口播视频。
 
 你会收到有序参考图片和参考音频：
@@ -673,8 +667,8 @@ def _enforce_video_prompt_contract(rendered: dict[str, Any]) -> dict[str, Any]:
         positive = f"{positive}{' ' if positive else ''}{drift_overrides}{contract}"
     elif any(term in positive for term in ("浅米色西装", "白大褂", "耳饰")) and drift_overrides not in positive:
         positive = f"{positive} {drift_overrides}"
-    if "无字幕硬约束" not in positive:
-        positive = f"{positive}{' ' if positive else ''}{no_visible_text_contract}"
+    if "此视频不生成字幕" not in positive:
+        positive = f"{no_visible_text_contract}\n\n{positive}" if positive else no_visible_text_contract
     if "声音硬约束" not in positive:
         positive = f"{positive}{' ' if positive else ''}{voice_only_contract}"
     result["positive_prompt"] = positive

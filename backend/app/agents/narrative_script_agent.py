@@ -244,6 +244,74 @@ def _try_parse_json_strict(text: str) -> dict | None:
     return None
 
 
+def _clean_reference_urls(values: Any, *, limit: int | None = None) -> list[str]:
+    urls = [str(item).strip() for item in (values or []) if str(item).strip()]
+    return urls[:limit] if limit is not None else urls
+
+
+def _build_reference_image_instruction(
+    *,
+    product_reference_urls: list[str],
+    scene_reference_url: str,
+    product_reference_role: str = "",
+    scene_reference_role: str = "",
+    scene_reference_observation: str = "",
+    product_reference_observation: str = "",
+) -> str:
+    """构建剧本阶段的多模态参考图说明，必须与附件顺序保持一致。"""
+    parts: list[str] = []
+    if product_reference_urls and scene_reference_url:
+        scene_index = len(product_reference_urls) + 1
+        parts.append(
+            f"【产品图与场地图附件】本次输入会按顺序附带 {len(product_reference_urls) + 1} 张 image_url 图片："
+            f"图1-图{len(product_reference_urls)} 为产品参考图，图{scene_index} 为当前场地图。"
+            "必须先观察产品图，再观察场地图；产品外观、包装、材质、颜色、卖点呈现，以及产品在当前场地里的摆放/使用关系，"
+            "都必须进入 scenes、shots[*].scene_description、supporting_visuals、action_description 或 dialogue 设计。"
+        )
+    elif scene_reference_url:
+        parts.append(
+            "【场地图附件】本次输入会附带 1 张 image_url 图片，它是当前场地图。"
+            "必须按该图锁定空间结构、桌面/台面关系、背景材质或背景结构、光线和氛围；"
+            "不得另行设计与该场地图冲突的新空间。"
+        )
+    elif product_reference_urls:
+        parts.append(
+            f"【产品图附件】本次输入会按顺序附带 {len(product_reference_urls)} 张 image_url 产品图片，"
+            f"图1-图{len(product_reference_urls)} 均为产品参考图。"
+            "必须把产品真实外观、包装、材质、颜色和卖点呈现写进剧本。"
+        )
+
+    if scene_reference_url:
+        parts.append(
+            f"当前场地图职责：{scene_reference_role or '当前场地/场景参考图'}。"
+            f"场地观察：{scene_reference_observation or '请直接观察附件中的真实场地，并把它作为全片统一空间基准。'}"
+        )
+    if product_reference_urls:
+        parts.append(
+            f"产品参考图职责：{product_reference_role or '产品参考图'}。"
+            f"产品观察：{product_reference_observation or '请直接观察附件中的真实产品，并保留产品外观、包装、材质、颜色和卖点呈现。'}"
+        )
+    if not parts:
+        return ""
+    return "\n".join(parts) + "\n\n"
+
+
+def _reference_image_parts(
+    *,
+    product_reference_urls: list[str],
+    scene_reference_url: str,
+) -> list[dict[str, Any]]:
+    """返回传给多模态模型的附件块。顺序：产品图在前，场地图最后。"""
+    image_parts: list[dict[str, Any]] = [
+        {"type": "image_url", "image_url": {"url": url}}
+        for url in product_reference_urls
+        if url
+    ]
+    if scene_reference_url:
+        image_parts.append({"type": "image_url", "image_url": {"url": scene_reference_url}})
+    return image_parts
+
+
 # _make_fallback_output 已合并到 _fallback_narrative_content，此处保留别名以兼容旧调用
 def _make_fallback_output() -> dict:
     return _fallback_narrative_content("", {})
@@ -313,6 +381,15 @@ class NarrativeScriptAgent:
         grid_count: int = int(task_spec.get("grid_count") or shot_count_total)
         storyboard_layout = str(task_spec.get("storyboard_layout") or "")
         is_talking_head = storyboard_layout == "talking_head_story_overview_board"
+        scene_reference_url = str(task_spec.get("scene_reference_url") or "").strip()
+        scene_reference_role = str(task_spec.get("scene_reference_role") or "").strip()
+        scene_reference_observation = str(task_spec.get("scene_reference_observation") or "").strip()
+        product_reference_urls = _clean_reference_urls(
+            task_spec.get("product_reference_urls") or [],
+            limit=3,
+        )
+        product_reference_role = str(task_spec.get("product_reference_role") or "").strip()
+        product_reference_observation = str(task_spec.get("product_reference_observation") or "").strip()
         regeneration_prompt_section = str(
             task_spec.get("regeneration_prompt_section") or ""
         ).strip()
@@ -335,9 +412,19 @@ class NarrativeScriptAgent:
                 "角色资产仅用于锁定同一位光希老王。"
             )
 
+        reference_image_instruction = _build_reference_image_instruction(
+            product_reference_urls=product_reference_urls,
+            scene_reference_url=scene_reference_url,
+            product_reference_role=product_reference_role,
+            scene_reference_role=scene_reference_role,
+            scene_reference_observation=scene_reference_observation,
+            product_reference_observation=product_reference_observation,
+        )
+
         task_msg = (
             f"项目 ID：{project_id}\n用户描述：{user_prompt or '（未提供）'}\n"
             f"{ref_hint}\n\n"
+            f"{reference_image_instruction}"
             f"创意简报引用：{json.dumps(brief_ref, ensure_ascii=False)}\n"
             f"风格圣经引用：{json.dumps(style_ref, ensure_ascii=False)}\n"
             f"音乐分析引用：{json.dumps(audio_ref, ensure_ascii=False)}\n\n"
@@ -405,8 +492,17 @@ class NarrativeScriptAgent:
             )
             tools = [t for t in [read_artifact_tool, write_artifact_tool] if t is not None]
             agent = create_react_agent(model=llm, tools=tools)
+            image_parts = _reference_image_parts(
+                product_reference_urls=product_reference_urls,
+                scene_reference_url=scene_reference_url,
+            )
+            human_message = (
+                HumanMessage(content=[{"type": "text", "text": task_msg}, *image_parts])
+                if image_parts
+                else HumanMessage(content=task_msg)
+            )
             result = await agent.ainvoke(
-                {"messages": [SystemMessage(content=system_content), HumanMessage(content=task_msg)]},
+                {"messages": [SystemMessage(content=system_content), human_message]},
                 config={"recursion_limit": 15},
             )
         except Exception as exc:
