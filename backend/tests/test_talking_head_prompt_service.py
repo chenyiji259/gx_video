@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+import pytest
+
 from app.services.talking_head_prompt_service import (
     _build_story_overview_board_prompt,
     _enforce_video_prompt_contract,
@@ -11,6 +13,7 @@ from app.services.talking_head_prompt_service import (
     _product_reference_prompt_items,
     _product_reference_text,
     _story_overview_board_reference_urls,
+    TalkingHeadPromptService,
 )
 from app.utils.ids import generate_ulid
 
@@ -177,6 +180,23 @@ def test_reference_prompt_items_describe_roles_without_asset_strings():
     assert all(item["role"] == "voice_reference" for item in audio_items)
     assert "背景音乐" in str(audio_items)
     assert "环境声" in str(audio_items)
+
+
+@pytest.mark.asyncio
+async def test_story_board_reference_urls_keep_app_yaml_asset_refs_unchanged():
+    service = TalkingHeadPromptService()
+    refs = [
+        "asset://asset-20260506200638-6g86k",
+        "asset://asset-20260506200638-6g86k",
+        "asset://asset-20260506200638-6g86k",
+    ]
+
+    urls = await service._resolve_story_board_reference_image_urls(
+        "project-1",
+        fallback_references=refs,
+    )
+
+    assert urls == refs
 
 
 def test_generated_ulid_still_fits_legacy_id_columns():

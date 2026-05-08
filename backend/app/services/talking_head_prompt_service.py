@@ -713,20 +713,8 @@ class TalkingHeadPromptService:
         *,
         fallback_references: list[str],
     ) -> list[str]:
-        cfg = get_config().talking_head
-        ref_dir = _resolve_path_from_project_root(cfg.story_board_reference_image_dir)
-        image_paths = _ordered_person_reference_paths(ref_dir) if ref_dir.exists() else []
-        if not image_paths:
-            return _clean_reference_list(fallback_references)
-
-        urls: list[str] = []
-        for path in image_paths:
-            urls.append(await _upload_local_reference_image(
-                project_id=project_id,
-                path=path,
-                asset_dir="talking_head_reference",
-            ))
-        return urls
+        # 这里必须原样使用 app.yaml 里的 asset 引用，不能再回退到本地文件上传。
+        return _clean_reference_list(fallback_references)
 
     async def compile_talking_head_video(
         self,
