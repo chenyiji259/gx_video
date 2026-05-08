@@ -11,7 +11,6 @@ from app.services.talking_head_prompt_service import (
     _product_reference_prompt_items,
     _product_reference_text,
     _story_overview_board_reference_urls,
-    _video_host_reference_urls,
 )
 from app.utils.ids import generate_ulid
 
@@ -30,57 +29,42 @@ def test_fallback_talking_head_video_prompt_locks_host_identity_and_clothing():
             "asset://host-face-3",
         ],
         audio_assets=["https://example.com/voice-1.wav"],
-        layout_reading_map={"segment_2": "只读取导演分镜图中第 2 行 / 15-30s 的画面内容参考、景别、运镜方式和动作节奏"},
+        layout_reading_map={"segment_2": "只读取故事大图中 Segment 2 / 15-30s 区域"},
     )
 
     positive = rendered["positive_prompt"]
-    negative = rendered["negative_prompt"]
-
     assert "光希老王" in positive
     assert "图片1是唯一服装与整体造型基准" in positive
     assert "图片2、图片3只用于补充锁定同一角色" in positive
-    assert "图片4是完整导演分镜图" in positive
-    assert "不要复刻它的表格页面" in positive
+    assert "图片4是完整 Story Overview Board / Production Board 大图" in positive
+    assert "不要复刻它的网格页面" in positive
     assert positive.startswith("此视频不生成字幕。最终画面必须纯净无字")
     assert "产品图必须作为本段介绍/展示的真实产品外观参考" in positive
-    assert "只读取导演分镜图中第 2 行 / 15-30s" in positive
+    assert "只读取故事大图中 Segment 2 / 15-30s 区域" in positive
     assert rendered["reference_image_urls"][3] == "https://example.com/board.png"
     assert rendered["params"]["watermark"] is False
     assert "clean visual reference" not in positive
-    assert "声音硬约束" in positive
-    assert "最终视频只需要中文说话人声" in positive
-    assert "背景音乐" in negative
-    assert "环境声" in negative
-    assert "音效" in negative
-    assert "换装" in negative
-    assert "改性别" in negative
-    assert "照抄导演分镜图乱码文字" in negative
+    assert "口播" not in positive
+    assert "声音硬约束" not in positive
+    assert "negative_prompt" not in rendered
 
 
 def test_enforce_talking_head_video_prompt_contract_repairs_llm_drift():
     rendered = _enforce_video_prompt_contract(
         {
-            "positive_prompt": "生成一个15秒中文单人知识口播视频。浅米色西装，女性形象。",
+            "positive_prompt": "生成一个15秒中文单人知识视频。浅米色西装，女性形象。",
             "negative_prompt": "字幕",
         }
     )
 
     positive = rendered["positive_prompt"]
-    negative = rendered["negative_prompt"]
-
     assert "主角只能是光希老王" in positive
     assert "图片1是唯一服装与整体造型基准" in positive
-    assert "图片4是完整导演分镜图" in positive
+    assert "图片4是完整 Story Overview Board / Production Board 大图" in positive
     assert positive.startswith("此视频不生成字幕。最终画面必须纯净无字")
-    assert "内容只能通过人物声音、口型和表演传达" in positive
-    assert "声音硬约束" in positive
-    assert "不要背景音乐" in positive
-    assert "改性别" in negative
-    assert "服装漂移" in negative
-    assert "从图片2或图片3引入新服装" in negative
-    assert "读取其他 Segment" in negative
-    assert "CTA文字" in negative
-    assert "可读文字" in negative
+    assert "口播" not in positive
+    assert "声音硬约束" not in positive
+    assert "negative_prompt" not in rendered
 
 def test_story_overview_board_reference_urls_include_hosts_scene_and_products():
     urls = _story_overview_board_reference_urls(
@@ -106,24 +90,6 @@ def test_story_overview_board_reference_urls_include_hosts_scene_and_products():
         "https://example.com/product-1.png",
         "https://example.com/product-2.png",
         "https://example.com/product-3.png",
-    ]
-
-
-def test_video_host_reference_urls_preserve_config_asset_urls():
-    urls = _video_host_reference_urls(
-        [
-            " asset://asset-person-1 ",
-            "asset://asset-person-2",
-            "",
-            "asset://asset-person-3",
-            "asset://asset-person-extra",
-        ]
-    )
-
-    assert urls == [
-        "asset://asset-person-1",
-        "asset://asset-person-2",
-        "asset://asset-person-3",
     ]
 
 
@@ -167,84 +133,11 @@ def test_story_overview_board_prompt_numbers_products_as_5_6_7_without_urls():
     assert "图片5是用户上传的产品图" in positive
     assert "图片6是用户上传的产品图" in positive
     assert "图片7是用户上传的产品图" in positive
-    assert "导演分镜流程图 / Director Shot List" in positive
-    assert "画面内容参考图必须是该行最大的视觉区域" in positive
-    assert "遮挡式无五官占位主持人" in positive
-    assert "浅色空白面罩" in positive
-    assert "无五官遮挡层" in positive
-    assert "头身比例" in positive
-    assert "眼镜外轮廓" in positive
-    assert "不要生成有五官的脸" in positive
-    assert "脸部无遮挡" in rendered["image_negative_prompt"]
-    assert "上传参考图本人脸" in rendered["image_negative_prompt"]
-    assert "只读取导演分镜图中第 1 行" in str(rendered["layout_reading_map"])
     assert "图片3是用户上传的产品图" not in positive
     assert "图片4是用户上传的产品图" not in positive
     assert "https://example.com" not in positive
     assert "人声之外不需要任何声音" in positive
     assert "BGM：轻柔干净" not in positive
-
-
-def test_story_overview_board_prompt_uses_uploaded_scene_reference_over_text_scene():
-    rendered = _build_story_overview_board_prompt(
-        spec=SimpleNamespace(
-            user_prompt="光希玻色因面霜",
-            output_config={"target_duration_sec": 15},
-        ),
-        brief_payload={
-            "title": "光希玻色因面霜",
-            "set_design_profile": "现代护肤科普工作室。暖灰色或浅米色背景。",
-        },
-        style_payload={},
-        narrative_payload={
-            "shots": [
-                {
-                    "scene_description": "现代护肤科普工作室。暖灰色或浅米色背景。",
-                    "dialogue": "先看浓度。再看耐受。",
-                }
-            ]
-        },
-        host_assets=["https://example.com/person-1.png"],
-        audio_assets=[],
-        scene_asset_url="https://example.com/scene.png",
-        product_refs=[],
-    )
-
-    positive = rendered["image_positive_prompt"]
-
-    assert "图片4：场地参考图，只用于锁定统一空间环境、桌面布局、背景材质、光线和氛围，不是人物图或产品图。" in positive
-    assert "以图片4场地参考图为准" in positive
-    assert "不要用文字场景设定覆盖图片4里的真实空间" in positive
-    assert "画面内容参考图：沿用图片4场地参考图锁定的统一空间环境" in positive
-    assert "场景：以图片4场地参考图为准" in positive
-    assert "统一场景：\n现代护肤科普工作室" not in positive
-    assert "画面内容参考图：现代护肤科普工作室" not in positive
-
-
-def test_story_overview_board_prompt_keeps_text_scene_when_no_scene_reference():
-    rendered = _build_story_overview_board_prompt(
-        spec=SimpleNamespace(
-            user_prompt="光希玻色因面霜",
-            output_config={"target_duration_sec": 15},
-        ),
-        brief_payload={
-            "title": "光希玻色因面霜",
-            "set_design_profile": "现代护肤科普工作室。暖灰色或浅米色背景。",
-        },
-        style_payload={},
-        narrative_payload={"shots": [{"dialogue": "先看浓度。再看耐受。"}]},
-        host_assets=["https://example.com/person-1.png"],
-        audio_assets=[],
-        scene_asset_url=None,
-        product_refs=[],
-    )
-
-    positive = rendered["image_positive_prompt"]
-
-    assert "统一场景：\n现代护肤科普工作室。暖灰色或浅米色背景。" in positive
-    assert "画面内容参考图：现代护肤科普工作室。暖灰色或浅米色背景。" in positive
-    assert "场景：护肤科普工作室" in positive
-    assert "以图片4场地参考图为准" not in positive
 
 
 def test_product_reference_prompt_text_uses_image_numbers_without_urls():
@@ -263,12 +156,12 @@ def test_product_reference_prompt_text_uses_image_numbers_without_urls():
         {
             "image_no": 5,
             "role": "product_reference",
-            "description": "用户上传产品图，只用于锁定产品瓶身、包装、材质、颜色和形态，不是人物图、场地图或导演分镜图。",
+            "description": "用户上传产品图，只用于锁定产品瓶身、包装、材质、颜色和形态，不是人物图、场地图或 Production Board。",
         },
         {
             "image_no": 6,
             "role": "product_reference",
-            "description": "用户上传产品图，只用于锁定产品瓶身、包装、材质、颜色和形态，不是人物图、场地图或导演分镜图。",
+            "description": "用户上传产品图，只用于锁定产品瓶身、包装、材质、颜色和形态，不是人物图、场地图或 Production Board。",
         },
     ]
 
