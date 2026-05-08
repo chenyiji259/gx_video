@@ -204,6 +204,24 @@ class CreativePlanningAgent:
         elif human_on_camera is False:
             human_on_camera_text = "否，不要真人入镜"
 
+        reference_image_instruction = ""
+        if product_reference_urls and scene_reference_url:
+            reference_image_instruction = (
+                f"图片顺序说明：图1-图{len(product_reference_urls)} 为产品参考图，最后 1 张为当前场地图。"
+                "请先看产品图，再看场地图；产品图用于识别产品外观、包装、材质和卖点，"
+                "场地图用于识别空间结构、布景、桌面关系、背景材质和光线氛围。\n\n"
+            )
+        elif scene_reference_url:
+            reference_image_instruction = (
+                "图片顺序说明：当前只有 1 张图，它是当前场地图。"
+                "请直接按场地图理解空间结构、布景、桌面关系、背景材质和光线氛围。\n\n"
+            )
+        elif product_reference_urls:
+            reference_image_instruction = (
+                f"图片顺序说明：图1-图{len(product_reference_urls)} 均为产品参考图。"
+                "请按顺序观察产品外观、包装、材质、颜色和卖点呈现，不要把它们当作人物图或场地图。\n\n"
+            )
+
         task_msg = (
             f"项目 ID：{project_id}\n"
             f"用户视频需求：{user_prompt or '（未提供）'}\n"
@@ -230,13 +248,14 @@ class CreativePlanningAgent:
             + (
                 f"本轮重新生成反馈：{regeneration_feedback_text}\n"
                 "必须基于这条反馈重新设计 creative_brief、style_bible、场景策略和剧本基调，"
-                "不要只是重复上一版方向；仍需保留有效的时长、画幅、产品图和固定场地图约束。\n\n"
+                "不要只是重复上一版方向；仍需保留有效的时长、画幅、产品图和当前场地图约束。\n\n"
                 if regeneration_feedback_text
                 else ""
             )
+            + reference_image_instruction
             + (
-                "固定场地参考图：本次输入附带 1 张 image_url 图片附件。"
-                f"{scene_reference_role or '它是固定场地/场景参考图'}，"
+                "当前场地参考图：本次输入附带 1 张 image_url 图片附件。"
+                f"{scene_reference_role or '它是当前场地/场景参考图'}，"
                 "请先观察该图片的空间结构、场地属性、布景、桌面关系、背景材质、光线和氛围，"
                 "再展开 creative_brief、style_bible、set_design_profile、reference_notes 和后续场景策略。"
                 "不要把这张图当作人物图或产品图；不要发散到与该场地冲突的新空间。\n\n"
@@ -285,12 +304,12 @@ class CreativePlanningAgent:
             agent = create_react_agent(model=llm, tools=tools)
             human_message: HumanMessage
             image_parts = []
-            if scene_reference_url:
-                image_parts.append({"type": "image_url", "image_url": {"url": scene_reference_url}})
             image_parts.extend(
                 {"type": "image_url", "image_url": {"url": url}}
                 for url in product_reference_urls
             )
+            if scene_reference_url:
+                image_parts.append({"type": "image_url", "image_url": {"url": scene_reference_url}})
             if image_parts:
                 human_message = HumanMessage(content=[{"type": "text", "text": task_msg}, *image_parts])
             else:
@@ -479,9 +498,9 @@ class CreativePlanningAgent:
         ][:3]
         if scene_reference_url:
             output_extension["scene_reference_profile"] = {
-                "role": task_spec.get("scene_reference_role") or "固定场地/场景参考图",
+                "role": task_spec.get("scene_reference_role") or "当前场地/场景参考图",
                 "url": scene_reference_url,
-                "observation": "已提供固定场地参考图，后续场景应围绕该空间、布景、光线和桌面关系展开。",
+                "observation": "已提供当前场地图，后续场景应围绕该空间、布景、光线和桌面关系展开。",
             }
         if product_reference_urls:
             output_extension["product_reference_profile"] = {

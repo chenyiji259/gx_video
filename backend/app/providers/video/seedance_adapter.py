@@ -219,8 +219,17 @@ class SeedanceAdapter:
     def _append_video_output_constraints(prompt: str) -> str:
         """追加所有视频都必须遵守的输出约束。"""
         text = str(prompt or "").strip()
-        constraint = "不要生成字幕、水印。"
-        if constraint in text or "不要生成字幕, 水印" in text:
+        constraint = (
+            "全局无文字硬约束：最终视频画面必须是纯净无字画面。"
+            "不要生成字幕、双语字幕、歌词字幕、旁白字幕、下三分之一标题、解释说明、按钮文案、弹幕、CTA文字、"
+            "成分卡文字、产品卖点文字、编号、时间码、标签、贴纸文字、UI文字、提示牌、白板字、屏幕字、海报字、"
+            "瓶身可读小字、包装可读文字、水印、乱码、假字或任何文字贴片。"
+            "如果参考图或脚本中存在文字，只能理解语义，不得复刻字形、排版、文本块或乱码。"
+            "产品、成分卡、屏幕和道具只能作为不可读视觉符号。"
+            "合格标准：任意一帧里都不能出现中文、英文、数字、乱码、假字或类似字幕的文本痕迹；"
+            "只要出现任何文字痕迹，本次视频视为失败，需要重新生成。"
+        )
+        if "全局无文字硬约束" in text:
             return text
         return f"{text}\n\n{constraint}".strip()
 

@@ -44,6 +44,72 @@ FACE_OCCLUSION_RULE = (
 )
 
 
+def _no_visible_text_contract() -> str:
+    return (
+        "无字幕硬约束：最终视频画面必须是纯净无字画面；台词只能通过人物声音、口型和表演传达，"
+        "不得以任何可见文字形式出现在画面中。"
+        "禁止生成字幕、双语字幕、歌词、旁白字幕、下三分之一标题、解释说明、按钮文案、弹幕、CTA文字、"
+        "成分卡文字、产品卖点文字、编号、时间码、标签、贴纸文字、UI文字、提示牌、白板字、屏幕字、"
+        "海报字、瓶身可读小字、包装可读文字或任何文字贴片。"
+        "如果参考图、导演分镜图、产品图或脚本中出现文字，只能理解其语义，不得复刻字形、排版、行列、乱码或文本块。"
+        "产品瓶身和道具只能作为不可读的视觉符号，成分卡和屏幕也只能作为抽象图标，不能承载可读文字。"
+        "合格标准：任意一帧里都不能出现中文、英文、数字、乱码、假字或类似字幕的文本痕迹；"
+        "画面中绝对不要出现任何可读文字；只要出现任何文字痕迹，本次视频视为失败，需要重新生成。"
+    )
+
+
+def _required_no_text_negative_terms() -> list[str]:
+    return [
+        "字幕",
+        "双语字幕",
+        "歌词字幕",
+        "旁白字幕",
+        "水印",
+        "标题栏",
+        "文字贴片",
+        "下三分之一标题",
+        "按钮文案",
+        "弹幕",
+        "CTA文字",
+        "成分卡文字",
+        "产品卖点文字",
+        "可读文字",
+        "中文文字",
+        "英文文字",
+        "数字编号",
+        "时间码",
+        "乱码文字",
+        "假字",
+        "UI文字",
+        "屏幕字",
+        "白板字",
+        "海报字",
+        "瓶身可读小字",
+        "包装可读文字",
+        "Production Board 页面",
+        "导演分镜图页面",
+        "网格排版",
+        "故事板卡片",
+        "换装",
+        "服装漂移",
+        "改性别",
+        "从图片2或图片3引入新服装",
+        "照抄导演分镜图乱码文字",
+        "读取其他 Segment",
+        "背景音乐",
+        "BGM",
+        "环境声",
+        "场景音",
+        "音效",
+        "掌声",
+        "转场音",
+    ]
+
+
+def _required_no_text_negative_prompt() -> str:
+    return "，".join(_required_no_text_negative_terms())
+
+
 def segment_time_range(index_zero_based: int) -> str:
     start = index_zero_based * TALKING_HEAD_SEGMENT_DURATION_SEC
     end = start + TALKING_HEAD_SEGMENT_DURATION_SEC
@@ -543,11 +609,7 @@ def _fallback_video_prompt(
     product_refs = product_refs or []
     shot_reference_url = story_board_url
     product_text = _product_reference_text(product_refs, start_index=5)
-    no_visible_text_rule = (
-        "无字幕硬约束：台词只能通过人物声音、口型和表演传达，画面中绝对不要出现任何可读文字。"
-        "不要生成字幕、下三分之一标题、解释说明、按钮文案、弹幕、CTA文字、成分卡文字、产品卖点文字、"
-        "编号、时间码、贴纸文字、UI文字或任何文字贴片；产品瓶身和道具只能作为不可读的视觉符号。"
-    )
+    no_visible_text_rule = _no_visible_text_contract()
     positive = f"""
 生成一个 15 秒中文单人护肤科普口播视频。
 
@@ -561,7 +623,7 @@ def _fallback_video_prompt(
 本次只生成 Segment {index + 1} / {segment_time_range(index)}。当前段语义来自结构化脚本和镜头计划，不依赖图片4 OCR。
 图片4读取范围：{instruction}。这条信息只用于从大图中定位当前段落，不允许把原始导演分镜图的文字、编号、分栏或排版带回最终视频。
 本段目标：{goal}。
-完整台词参考：「{dialogue or '本段可包含开场动画、产品特写、自然停顿或少量无对白片段'}」
+对白只用于驱动人物口型和人声，不是画面元素，不得以字幕、提词器、标题条、说明卡、气泡文字或任何可读文字形式出现在画面中。对白参考：「{dialogue or '本段可包含开场动画、产品特写、自然停顿或少量无对白片段'}」
 {no_visible_text_rule}
 声音硬约束：最终视频只需要中文说话人声，不要背景音乐、不要环境声、不要场景音、不要音效、不要掌声、不要转场音，人声之外不需要别的声音。
 
@@ -575,7 +637,7 @@ def _fallback_video_prompt(
 """.strip()
     return {
         "positive_prompt": positive,
-        "negative_prompt": "字幕，水印，标题栏，文字贴片，Production Board 页面，导演分镜图页面，网格排版，多人物，换脸，换年龄感，换装，服装漂移，改性别，白大褂，西装，耳饰，照抄导演分镜图乱码文字，读取其他 Segment，跳到新场景，夸张表演，背景音乐，BGM，环境声，场景音，音效，掌声，转场音",
+        "negative_prompt": _required_no_text_negative_prompt(),
         "board_segment_reading_instruction": instruction,
         "dialogue_script": dialogue,
         "timeline": segment_script.get("speech_timing_plan") or [],
@@ -597,12 +659,7 @@ def _enforce_video_prompt_contract(rendered: dict[str, Any]) -> dict[str, Any]:
         "若前文出现浅米色西装、白大褂、耳饰或任何与图片1不一致的服装/性别描述，一律视为无效并忽略；"
         "最终只保留光希老王，服装只以图片1为准。"
     )
-    no_visible_text_contract = (
-        "无字幕硬约束：台词只能通过人物声音、口型和表演传达，画面中绝对不要出现任何可读文字；"
-        "不要生成字幕、下三分之一标题、解释说明、按钮文案、弹幕、CTA文字、成分卡文字、产品卖点文字、"
-        "编号、时间码、贴纸文字、UI文字或任何文字贴片；产品瓶身、成分卡和道具只能作为不可读的视觉符号，"
-        "不能承载可读文字。"
-    )
+    no_visible_text_contract = _no_visible_text_contract()
     voice_only_contract = (
         "声音硬约束：最终视频只需要中文说话人声；音频参考只用于说话音色和声线，不要背景音乐、不要环境声、不要场景音、不要音效、不要掌声、不要转场音，人声之外不需要任何声音。"
     )
@@ -623,36 +680,7 @@ def _enforce_video_prompt_contract(rendered: dict[str, Any]) -> dict[str, Any]:
     result["positive_prompt"] = positive
 
     negative = str(result.get("negative_prompt") or "").strip()
-    required_negative = [
-        "字幕",
-        "水印",
-        "标题栏",
-        "文字贴片",
-        "Production Board 页面",
-        "导演分镜图页面",
-        "网格排版",
-        "换装",
-        "服装漂移",
-        "改性别",
-        "从图片2或图片3引入新服装",
-        "照抄导演分镜图乱码文字",
-        "读取其他 Segment",
-        "下三分之一标题",
-        "按钮文案",
-        "弹幕",
-        "CTA文字",
-        "成分卡文字",
-        "产品卖点文字",
-        "可读文字",
-        "UI文字",
-        "背景音乐",
-        "BGM",
-        "环境声",
-        "场景音",
-        "音效",
-        "掌声",
-        "转场音",
-    ]
+    required_negative = _required_no_text_negative_terms()
     for item in required_negative:
         if item not in negative:
             negative = f"{negative}，{item}" if negative else item
@@ -707,7 +735,7 @@ class TalkingHeadPromptService:
             project_id,
             fallback_references=host_reference_assets,
         )
-        scene_reference_url = await self._resolve_scene_reference_image_url(project_id)
+        scene_reference_url = await self._resolve_scene_reference_image_url(session, project_id, spec)
         product_refs = await _resolve_product_reference_urls(session, project_id, spec)
         reference_audio_urls = _clean_reference_list(reference_audio_assets)
         rendered = _build_story_overview_board_prompt(
@@ -783,9 +811,32 @@ class TalkingHeadPromptService:
         )
         return bundle
 
-    async def _resolve_scene_reference_image_url(self, project_id: str) -> str | None:
+    async def _resolve_scene_reference_image_url(
+        self,
+        session: AsyncSession,
+        project_id: str,
+        spec: Any | None,
+    ) -> str | None:
+        output_config = getattr(spec, "output_config", None) or {}
+        scene_asset_id = str(
+            output_config.get("scene_reference_asset_id")
+            or output_config.get("scene_reference_image_asset_id")
+            or ""
+        ).strip()
+        if scene_asset_id:
+            asset = await AssetRepository(session).get_by_id_for_project(scene_asset_id, project_id)
+            if asset:
+                url = await build_asset_access_url(asset)
+                if url:
+                    return url
+
         cfg = get_config().talking_head
-        scene_path = str(getattr(cfg, "story_board_scene_image_path", "") or "").strip()
+        scene_path = str(
+            output_config.get("scene_reference_image_path")
+            or output_config.get("story_board_scene_image_path")
+            or getattr(cfg, "story_board_scene_image_path", "")
+            or ""
+        ).strip()
         if scene_path:
             path = _resolve_path_from_project_root(scene_path)
         else:

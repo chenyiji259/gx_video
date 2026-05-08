@@ -20,6 +20,8 @@ from pathlib import Path
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
+from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_openai import ChatOpenAI
 
 from app.agents.creative_planning_agent import CreativePlanningAgent
 from app.core.logging import get_project_logger
@@ -258,10 +260,14 @@ class BriefPersistenceService:
             style_version_no = await StyleBibleRepository(session).get_next_version_no(project_id)
             active_narrative_id = project.active_narrative_script_version_id
 
-        scene_reference_url = await self._resolve_scene_reference_image_url(project_id)
+        scene_reference_url = await self._resolve_scene_reference_image_url(
+            project_id,
+            output_config=output_config,
+        )
+        scene_reference_observation = await self._describe_scene_reference_image(scene_reference_url)
         product_reference_urls = await self._resolve_product_reference_image_urls(
             project_id,
-            reference_image_asset_ids,
+            list(output_config.get("product_reference_asset_ids") or reference_image_asset_ids),
         )
         regeneration_feedback = await regeneration_context_service.get_latest_feedback(
             project_id,
@@ -300,7 +306,8 @@ class BriefPersistenceService:
             "image_resolution": output_config.get("image_resolution", "2K"),
             "image_size": output_config.get("image_size"),
             "scene_reference_url": scene_reference_url,
-            "scene_reference_role": "固定场地/场景参考图，用于创意规划阶段锁定空间、布景、光线、桌面关系和场地氛围",
+            "scene_reference_role": "当前场地/场景参考图，用于创意规划阶段锁定空间、布景、光线、桌面关系和场地氛围",
+            "scene_reference_observation": scene_reference_observation,
             "product_reference_urls": product_reference_urls,
             "product_reference_role": "产品参考图，用于创意规划阶段识别产品外观、包装、质地、颜色、卖点呈现和使用场景",
             "regeneration_feedback": regeneration_feedback,
@@ -325,6 +332,7 @@ class BriefPersistenceService:
             creative_brief_data,
             style_bible_data,
             scene_reference_url=scene_reference_url,
+            scene_reference_observation=scene_reference_observation,
             product_reference_urls=product_reference_urls,
         )
 
@@ -363,9 +371,33 @@ class BriefPersistenceService:
         )
         return brief_version, style_version
 
-    async def _resolve_scene_reference_image_url(self, project_id: str) -> str | None:
+    async def _resolve_scene_reference_image_url(
+        self,
+        project_id: str,
+        *,
+        output_config: dict[str, Any] | None = None,
+    ) -> str | None:
+        output_config = dict(output_config or {})
+        scene_asset_id = str(
+            output_config.get("scene_reference_asset_id")
+            or output_config.get("scene_reference_image_asset_id")
+            or ""
+        ).strip()
+        if scene_asset_id:
+            async with UnitOfWork() as uow:
+                asset = await AssetRepository(uow.session).get_by_id_for_project(scene_asset_id, project_id)
+            if asset:
+                url = await build_asset_access_url(asset)
+                if url:
+                    return url
+
         cfg = get_config().talking_head
-        scene_path = str(getattr(cfg, "story_board_scene_image_path", "") or "").strip()
+        scene_path = str(
+            output_config.get("scene_reference_image_path")
+            or output_config.get("story_board_scene_image_path")
+            or getattr(cfg, "story_board_scene_image_path", "")
+            or ""
+        ).strip()
         if not scene_path:
             return None
         path = Path(scene_path)
@@ -404,12 +436,75 @@ class BriefPersistenceService:
                     )
             return urls
 
+    async def _describe_scene_reference_image(self, scene_reference_url: str | None) -> str:
+        """用多模态模型把当前场地图转成可继承的文字观察。"""
+        if not scene_reference_url:
+            return ""
+        try:
+            from app.utils.omni_config import load_omni_config
+        except Exception:  # pragma: no cover
+            load_omni_config = None  # type: ignore[assignment]
+        try:
+            omni_cfg = load_omni_config() if load_omni_config is not None else {}
+            cfg = get_config().llm
+            model_name = omni_cfg.get("model_name") or cfg.model
+            api_key = omni_cfg.get("api_key") or cfg.api_key
+            base_url = omni_cfg.get("endpoint") or cfg.base_url
+            llm = ChatOpenAI(
+                model=model_name,
+                api_key=api_key,
+                base_url=base_url,
+                temperature=0.2,
+                max_tokens=256,
+                timeout=int(omni_cfg.get("timeout") or cfg.timeout),
+                streaming=True,
+                extra_body={"enable_thinking": False},
+                model_kwargs={
+                    "modalities": ["text"],
+                    "stream_options": {"include_usage": False},
+                },
+            )
+            prompt = (
+                "请客观描述这张当前场地图，输出 JSON，字段只要 observation。"
+                "observation 必须是一句中文，包含：空间类型、桌面/台面关系、背景材质或背景结构、光线氛围。"
+                "如果画面里有明显露台、庭院、室外桌椅或伞棚，也要直接写出来。"
+                "不要提建议，不要解释方法，不要复述图片是否存在。"
+            )
+            response = await llm.ainvoke(
+                [
+                    SystemMessage(content="你是专业场景视觉分析助手，只输出严格 JSON。"),
+                    HumanMessage(
+                        content=[
+                            {"type": "image_url", "image_url": {"url": scene_reference_url}},
+                            {"type": "text", "text": prompt},
+                        ]
+                    ),
+                ]
+            )
+            raw_text = str(getattr(response, "content", "") or "").strip()
+            if raw_text:
+                try:
+                    from app.utils.json_utils import safe_parse_json
+                    parsed = safe_parse_json(raw_text, fallback={})
+                    observation = str((parsed or {}).get("observation") or "").strip()
+                    if observation:
+                        return observation
+                except Exception:
+                    return raw_text
+        except Exception as exc:  # noqa: BLE001
+            get_project_logger("brief", module="services.brief").warning(
+                f"场地图视觉观察失败，使用回退描述: {exc!r}",
+                event_type="scene_reference_analysis_failed",
+            )
+        return "当前场地图已提供，后续应以该图中的真实空间结构、桌面关系、背景材质和光线氛围为基准。"
+
     def _enforce_reference_profiles(
         self,
         creative_brief_data: dict[str, Any],
         style_bible_data: dict[str, Any],
         *,
         scene_reference_url: str | None,
+        scene_reference_observation: str,
         product_reference_urls: list[str],
     ) -> None:
         """LLM 可能忽略图片附件；后端用真实输入修正可继承的参考图契约。"""
@@ -423,13 +518,13 @@ class BriefPersistenceService:
 
         if scene_reference_url:
             scene_profile = {
-                "role": "固定场地/场景参考图",
+                "role": "当前场地/场景参考图",
                 "url": scene_reference_url,
-                "observation": (
-                    "已收到固定场地参考图 data/person_pic/d1.png。后续创意、剧本、分镜和视频 prompt "
+                "observation": scene_reference_observation or (
+                    "已收到当前场地图。后续创意、剧本、分镜和视频 prompt "
                     "必须基于该图片的空间结构、布景、桌面关系、背景材质、光线和场地氛围展开。"
                 ),
-                "usage_rules": "不得声称未收到固定场地图；不得规划与该场地冲突的新空间。",
+                "usage_rules": "不得声称未收到场地图；不得规划与该场地冲突的新空间。",
             }
             extension["scene_reference_profile"] = scene_profile
             extension["set_design_profile"] = scene_profile
@@ -453,8 +548,7 @@ class BriefPersistenceService:
             notes_parts.append(str(style_bible_data["reference_notes"]))
         if scene_reference_url:
             notes_parts.append(
-                "固定场地图已提供：data/person_pic/d1.png，后续必须以该图的真实场地为基准，"
-                "不得再写“未收到固定场地参考图”。"
+                f"当前场地图已提供，场地观察：{scene_reference_observation or '当前场地图已提供，后续必须以该图的真实场地为基准。'}"
             )
         if product_reference_urls:
             notes_parts.append(

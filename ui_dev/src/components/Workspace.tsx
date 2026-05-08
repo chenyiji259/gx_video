@@ -84,6 +84,7 @@ const DEFAULT_FORM = {
   style: '知识口播，专业、亲和、干净护肤科普，纯净无字幕画面',
   humanOnCamera: true,
   productReferenceAssetIds: [] as string[],
+  sceneReferenceAssetId: '',
 };
 
 const FIXED_ASPECT_RATIO = '9:16';
@@ -370,7 +371,9 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
   const [shouldAutoPlay, setShouldAutoPlay] = useState(false);
   const [form, setForm] = useState(DEFAULT_FORM);
   const [productAssets, setProductAssets] = useState<AssetRecord[]>([]);
+  const [sceneAsset, setSceneAsset] = useState<AssetRecord | null>(null);
   const [uploadingProducts, setUploadingProducts] = useState(false);
+  const [uploadingScene, setUploadingScene] = useState(false);
   const [activeStep, setActiveStep] = useState(1);
   const [imagePreview, setImagePreview] = useState<{ title: string; url: string; description?: string } | null>(null);
   const [creativePackageFeedback, setCreativePackageFeedback] = useState('');
@@ -381,6 +384,7 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
   });
   const videoRef = useRef<HTMLVideoElement>(null);
   const productInputRef = useRef<HTMLInputElement>(null);
+  const sceneInputRef = useRef<HTMLInputElement>(null);
   const eventRefreshTimerRef = useRef<number | null>(null);
   const autoRefreshPollTimerRef = useRef<number | null>(null);
   const autoRefreshStopAtRef = useRef<number | null>(null);
@@ -549,6 +553,7 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
   useEffect(() => {
     if (!workspace?.spec) return;
     const productReferenceAssetIds = workspace.spec.output_config?.product_reference_asset_ids || [];
+    const sceneReferenceAssetId = workspace.spec.output_config?.scene_reference_asset_id || '';
     setForm({
       prompt: workspace.spec.user_prompt || '',
       platform: workspace.spec.output_config?.platform || 'tiktok',
@@ -557,9 +562,11 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
       style: workspace.spec.output_config?.style_preference || TALKING_HEAD_STYLE_PREFERENCE,
       humanOnCamera: Boolean(workspace.spec.output_config?.human_on_camera),
       productReferenceAssetIds,
+      sceneReferenceAssetId,
     });
-    if (!productReferenceAssetIds.length) {
+    if (!productReferenceAssetIds.length && !sceneReferenceAssetId) {
       setProductAssets([]);
+      setSceneAsset(null);
       return;
     }
 
@@ -574,6 +581,13 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
       );
     }).catch(() => {
       if (!cancelled) setProductAssets([]);
+    });
+    void assetApi.listAssets(projectId, { asset_type: 'scene_reference', limit: 50 }).then((result) => {
+      if (cancelled) return;
+      const asset = result.items.find((item) => item.id === sceneReferenceAssetId) || null;
+      setSceneAsset(asset);
+    }).catch(() => {
+      if (!cancelled) setSceneAsset(null);
     });
 
     return () => {
@@ -811,6 +825,16 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
     });
   };
 
+  const uploadSceneFile = async (file: File) => {
+    const size = await readImageSize(file);
+    return assetApi.uploadFile(projectId, {
+      file,
+      asset_type: 'scene_reference',
+      width: size.width || undefined,
+      height: size.height || undefined,
+    });
+  };
+
   const handleProductUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files || []).filter((file) => file.type.startsWith('image/'));
     event.target.value = '';
@@ -854,6 +878,33 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
     }));
   };
 
+  const handleSceneUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = Array.from(event.target.files || []).find((item) => item.type.startsWith('image/'));
+    event.target.value = '';
+    if (!file) return;
+    setUploadingScene(true);
+    try {
+      const uploaded = await uploadSceneFile(file);
+      setSceneAsset(uploaded);
+      setForm((prev) => ({
+        ...prev,
+        sceneReferenceAssetId: uploaded.id,
+      }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '场地图上传失败');
+    } finally {
+      setUploadingScene(false);
+    }
+  };
+
+  const handleRemoveSceneAsset = () => {
+    setSceneAsset(null);
+    setForm((prev) => ({
+      ...prev,
+      sceneReferenceAssetId: '',
+    }));
+  };
+
   const handleGeneratePlan = async () => {
     setActiveStep(2);
     await handleAction('generate-creative-package', async () => {
@@ -874,6 +925,7 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
         style_preset_locked: true,
         subtitles_enabled: false,
         product_reference_asset_ids: form.productReferenceAssetIds,
+        scene_reference_asset_id: form.sceneReferenceAssetId || undefined,
       });
       await projectApi.activateSpec(projectId, version.id);
       await workflowApi.generateCreativePackage(projectId);
@@ -1393,6 +1445,50 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
                       ) : (
                         <div className="rounded-lg border border-dashed border-gray-200 bg-gray-50 px-3 py-4 text-center text-xs text-gray-400">
                           可选上传；上传后创作、导演分镜图、视频提示词都会明确引用产品图。
+                        </div>
+                      )}
+                    </div>
+                    <div className="col-span-3 rounded-2xl border border-gray-200 bg-white p-3">
+                      <div className="mb-2 flex items-center justify-between gap-3">
+                        <div>
+                          <div className="text-sm font-semibold text-gray-900">场地图</div>
+                          <div className="text-xs text-gray-400">当前项目的空间、桌面、背景和光线参考；每个项目可单独替换</div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => sceneInputRef.current?.click()}
+                          disabled={uploadingScene}
+                          className="inline-flex items-center gap-1 rounded-lg border border-violet-100 bg-violet-50 px-3 py-2 text-xs font-medium text-violet-700 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          <ImagePlus className="h-4 w-4" />
+                          {uploadingScene ? '上传中' : sceneAsset ? '替换' : '上传'}
+                        </button>
+                        <input
+                          ref={sceneInputRef}
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
+                          onChange={handleSceneUpload}
+                        />
+                      </div>
+                      {sceneAsset ? (
+                        <div className="group relative aspect-[16/9] overflow-hidden rounded-lg border border-gray-100 bg-gray-50">
+                          <img src={sceneAsset.storage_uri} alt="场地图" className="h-full w-full object-cover" />
+                          <button
+                            type="button"
+                            onClick={handleRemoveSceneAsset}
+                            className="absolute right-1 top-1 rounded-md bg-white/90 px-1.5 py-0.5 text-[10px] font-medium text-gray-600 opacity-0 shadow-sm transition group-hover:opacity-100"
+                          >
+                            移除
+                          </button>
+                        </div>
+                      ) : form.sceneReferenceAssetId ? (
+                        <div className="rounded-lg bg-gray-50 px-3 py-2 text-xs text-gray-500">
+                          已关联场地图
+                        </div>
+                      ) : (
+                        <div className="rounded-lg border border-dashed border-gray-200 bg-gray-50 px-3 py-4 text-center text-xs text-gray-400">
+                          未上传时使用系统兜底场地图；上传后创意剧本包会按“产品图在前、场地图最后”的顺序传给模型。
                         </div>
                       )}
                     </div>
@@ -2000,9 +2096,53 @@ export const Workspace = ({ projectId, onNavigate }: WorkspaceProps) => {
                       <div className="rounded-lg bg-gray-50 px-2 py-1.5 text-[11px] text-gray-500">
                         已关联 {form.productReferenceAssetIds.length} 张产品图
                       </div>
-                    ) : (
+                  ) : (
                       <div className="rounded-lg border border-dashed border-gray-200 bg-gray-50 px-3 py-4 text-center text-[11px] text-gray-400">
                           可选上传；上传后创作、导演分镜图、视频提示词都会明确引用产品图。
+                      </div>
+                    )}
+                  </div>
+                  <div className="col-span-3 rounded-xl border border-gray-200 bg-white p-3">
+                    <div className="mb-2 flex items-center justify-between gap-2">
+                      <div>
+                        <div className="text-xs font-semibold text-gray-900">场地图</div>
+                        <div className="text-[10px] text-gray-400">当前项目的空间、桌面、背景和光线参考，可随项目替换</div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => sceneInputRef.current?.click()}
+                        disabled={uploadingScene}
+                        className="inline-flex items-center gap-1 rounded-lg border border-violet-100 bg-violet-50 px-2.5 py-1.5 text-[11px] font-medium text-violet-700 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        <ImagePlus className="h-3.5 w-3.5" />
+                        {uploadingScene ? '上传中' : sceneAsset ? '替换' : '上传'}
+                      </button>
+                      <input
+                        ref={sceneInputRef}
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        onChange={handleSceneUpload}
+                      />
+                    </div>
+                    {sceneAsset ? (
+                      <div className="group relative aspect-video overflow-hidden rounded-lg border border-gray-100 bg-gray-50">
+                        <img src={sceneAsset.storage_uri} alt="场地图" className="h-full w-full object-cover" />
+                        <button
+                          type="button"
+                          onClick={handleRemoveSceneAsset}
+                          className="absolute right-1 top-1 rounded-md bg-white/90 px-1.5 py-0.5 text-[10px] font-medium text-gray-600 opacity-0 shadow-sm transition group-hover:opacity-100"
+                        >
+                          移除
+                        </button>
+                      </div>
+                    ) : form.sceneReferenceAssetId ? (
+                      <div className="rounded-lg bg-gray-50 px-2 py-1.5 text-[11px] text-gray-500">
+                        已关联场地图
+                      </div>
+                    ) : (
+                      <div className="rounded-lg border border-dashed border-gray-200 bg-gray-50 px-3 py-4 text-center text-[11px] text-gray-400">
+                        未上传时使用系统兜底场地图；上传后创意剧本包会按“产品图在前、场地图最后”的顺序传给模型。
                       </div>
                     )}
                   </div>

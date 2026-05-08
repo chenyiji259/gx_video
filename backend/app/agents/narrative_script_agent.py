@@ -353,7 +353,7 @@ class NarrativeScriptAgent:
             f"请先使用 read_artifact_tool 读取创意简报和风格圣经，尤其要读取 "
             f"creative_brief.extension.total_shots_generated、target_duration_sec、allowed_shot_durations_sec、character_list、aspect_ratio。"
             f"如果 creative_brief.extension.scene_reference_profile 或 product_reference_profile 存在，"
-            f"必须继承其中的固定场地、产品外观、包装、材质、颜色、摆放关系和卖点呈现规则；"
+            f"必须继承其中的当前场地图、产品外观、包装、材质、颜色、摆放关系和卖点呈现规则；"
             f"style_bible.reference_notes 中的场地图/产品图观察结论必须进入 scenes、shots[*].scene_description、"
             f"supporting_visuals 或 action_description，不得在剧本阶段丢失。"
             f"然后生成叙事剧本 JSON，根对象必须包含 story_arc / shots / characters / scenes。"

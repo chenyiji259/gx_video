@@ -305,6 +305,8 @@ export const projectApi = {
       style_preset_locked?: boolean;
       subtitles_enabled?: boolean;
       product_reference_asset_ids?: string[];
+      scene_reference_asset_id?: string;
+      scene_reference_image_path?: string;
     }
   ): Promise<{ id: string }> {
     return request(`/projects/${projectId}/spec/versions`, {

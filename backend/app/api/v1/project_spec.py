@@ -77,6 +77,14 @@ class CreateSpecVersionRequest(BaseModel):
         None,
         description="用户上传的产品图 asset_id 列表，顺序即上传顺序，最多 3 张。",
     )
+    scene_reference_asset_id: Optional[str] = Field(
+        None,
+        description="用户上传的场地图 asset_id；为空时使用系统兜底场地图。",
+    )
+    scene_reference_image_path: Optional[str] = Field(
+        None,
+        description="项目级本地场地图路径；为空时使用系统兜底场地图。",
+    )
     constraints: Optional[dict] = Field(
         None, description="附加约束（可选）"
     )
@@ -204,6 +212,10 @@ async def create_spec_version(
             _output_config["product_reference_asset_ids"] = normalize_product_reference_asset_ids(
                 _output_config.get("product_reference_asset_ids")
             )
+        if body.scene_reference_asset_id is not None:
+            _output_config["scene_reference_asset_id"] = body.scene_reference_asset_id.strip()
+        if body.scene_reference_image_path is not None:
+            _output_config["scene_reference_image_path"] = body.scene_reference_image_path.strip()
         _output_config = normalize_output_config(_output_config)
         # 新流程 input_mode：有文本需求但无音频时自动切换为 text_only
         _input_mode = body.input_mode

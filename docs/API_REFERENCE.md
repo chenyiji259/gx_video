@@ -520,7 +520,9 @@ curl -H "Authorization: Bearer $TOKEN" \
   "output_config": {
     "aspect_ratio": "16:9",
     "resolution": "1080p",
-    "target_duration_sec": 45
+    "target_duration_sec": 45,
+    "product_reference_asset_ids": ["01HPRODUCT_ASSET_ID"],
+    "scene_reference_asset_id": "01HSCENE_ASSET_ID"
   },
   "reference_image_asset_ids": ["01HIMAGE_ASSET_ID"]
 }
@@ -533,7 +535,7 @@ curl -H "Authorization: Bearer $TOKEN" \
 | audio_start_sec | float | 否 | 音频起始时间（秒），默认 0.0 |
 | audio_end_sec | float | 否 | 音频结束时间（秒），须大于 start |
 | user_prompt | string | 否 | 用户创意描述，最长 2000 字符 |
-| output_config | object | 否 | 输出配置（aspect_ratio / resolution / target_duration_sec） |
+| output_config | object | 否 | 输出配置（aspect_ratio / resolution / target_duration_sec / product_reference_asset_ids / scene_reference_asset_id） |
 | reference_image_asset_ids | array | 否 | 参考图 asset_id 列表（最多 5 张），有值时 input_mode 自动切换为 audio_image_text |
 | constraints | object | 否 | 附加约束（可选） |
 
